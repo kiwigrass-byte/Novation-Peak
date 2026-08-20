@@ -1,0 +1,207 @@
+-- Novation PEAK v7 (Single Mode Only)
+-- 08/2026
+
+-- ── Device / channel setup ──────────────────────────────────────────────────
+local authorDate = "Kiwigrass 2026"
+info.setText(authorDate)
+
+-- Peak header info
+local PEAK_SYSEX = {0x00,0x20,0x29,0x01,0x10,0x00,0x7E}
+
+globalDevice   = devices.get(2)
+globalPort     = globalDevice:getPort()
+globalChannel  = globalDevice:getChannel()
+currentDevice  = devices.get(1)
+currentDevice:setChannel(globalChannel)
+currentChannel = globalChannel
+
+-- ── State variables ─────────────────────────────────────────────────────────
+local notes = {"C  %d","C# %d","D  %d","D# %d","E  %d","F  %d","F# %d","G  %d","G# %d","A  %d","A# %d","B  %d"}
+
+local nameBank = {}   -- nameBank[bank][patchNum] = patch name string
+for y = 1,4 do        -- 1=bank A, 2=bank B, 3=bank C, 4=bank D
+    nameBank[y] = {}
+    for z = 0,127 do nameBank[y][z] = "PATCH" end
+end
+
+local bankNamesLoaded = {}  -- bankNamesLoaded[bank] = true once all 128 names received
+for y = 1,4 do bankNamesLoaded[y] = false end
+
+local sysExPatch = {}   -- sysExPatch[byte] – store patch data
+local sysExGlobal = {}  -- sysExGlobal[byte] – global / system settings dump
+
+-- NRPN reassembly registers
+local msbNum = 0
+local lsbNum = 0
+
+-- ── Wavetable name lookup ────────────────────────────────────────────────────
+waveTableNames = {
+  [4]="BS Sine",   [5]="Random",   [6]="Zing",      [7]="Tubey",    [8]="Octaves",
+  [9]="Wobbler",   [10]="Chords",  [11]="Didgery",  [12]="Harsh",   [13]="Organ",
+  [14]="E.Piano",  [15]="VoxOooEe",[16]="VoxYahEe", [17]="Winds",   [18]="SoftClav",
+  [19]="String",   [20]="BassOrgn",[21]="Acid",     [22]="Buzzy",   [23]="Carousel",
+  [24]="Choral",   [25]="Clmbing", [26]="CoinFlip", [27]="Deep",    [28]="Dub",
+  [29]="Eee",      [30]="Eris",    [31]="Flame",    [32]="Further", [33]="GlassSaw",
+  [34]="Glassy",   [35]="Granular",[36]="Grime",    [37]="Drow",    [38]="Heavy",
+  [39]="Hedge",    [40]="Hungry",  [41]="Ladders",  [42]="Lead",    [43]="Modeling",
+  [44]="Modem",    [45]="Monster", [46]="Screech",  [47]="SeaBase", [48]="Shmorgan",
+  [49]="Sprials",  [50]="Steel",   [51]="Sunrise",  [52]="Swell",   [53]="Thicker",
+  [54]="Thinner",  [55]="Tides",   [56]="Tokyo",    [57]="Tops",    [58]="VChord",
+  [59]="Variance", [60]="Vocaloid",[61]="Vowelled", [62]="WeirdVox",[63]="Yeah",
+  [64]="User 1",   [65]="User 2",  [66]="User 3",   [67]="User 4",  [68]="User 5",
+  [69]="User 6",   [70]="User 7",  [71]="User 8",   [72]="User 9",  [73]="User 10"
+}
+
+-- ── on load ────────────────────────────────────────────────────────────────
+function preset.onLoad()
+  getGlobalSettings(nil, 1)
+  getAllWaveNames(nil, 1)
+end
+
+-- ── Helper functions ──────────────────────────────────────────────────────────
+-- [Keep existing helper functions: findArrayByValue, getBits, concat, safeGet unchanged]
+
+-- ── Simplified displayPatch (single mode only) ──────────────────────────────
+function displayPatch(valueObject, value)
+  local bankTxt = {"A","B","C","D"}
+  local bankNum = parameterMap.get(globalDevice:getId(), PT_VIRTUAL, 10032)
+  local patchName = nameBank[bankNum][value]
+  local c423 = safeGet(423); if c423 then c423:setName(patchName) end
+  return (bankTxt[bankNum].." "..string.format("%03d",value))
+end
+
+-- ── Simplified selectIt (single mode only) ────────────────────────────────────
+function selectIt(valueObject, value)
+  if value == 0 then return end
+  local message         = valueObject:getMessage()
+  local parameterNumber = message:getParameterNumber()
+  local messageValue    = message:getValue()
+  local bankNum = parameterMap.get(globalDevice:getId(), PT_VIRTUAL, parameterNumber-messageValue-1)
+  local progNum = parameterMap.get(globalDevice:getId(), PT_VIRTUAL, parameterNumber-messageValue) + messageValue - 2
+  if bankNum == 0 then bankNum = 1 end
+  if progNum == 128 then progNum = 0 end
+  if progNum == -1 then progNum = 127 end
+  parameterMap.set(globalDevice:getId(), PT_VIRTUAL, parameterNumber-messageValue, progNum+1)
+  parameterMap.set(globalDevice:getId(), PT_VIRTUAL, parameterNumber-messageValue, progNum)
+  
+  midi.sendControlChange(globalPort, currentChannel, 32, bankNum)
+  midi.sendProgramChange(globalPort, currentChannel, progNum)
+  midi.sendSysex(globalPort, concat(PEAK_SYSEX,{0x40,0x00,0x00,0x00,0x00,0x00}))
+  
+  if not bankNamesLoaded[bankNum] then
+    retrieveNames(nil, 1)
+  end
+end
+
+function retrieveNames(valueObject, value)
+  if value == 0 or parameterMap.get(globalDevice:getId(), PT_VIRTUAL, 10024) == 0 then return end
+  local bankNum = parameterMap.get(globalDevice:getId(), PT_VIRTUAL, 10032)
+  midi.sendSysex(globalPort, concat(PEAK_SYSEX, {0x41,0x00,0x00,0x00,bankNum,0}))
+end
+
+function currentPatch(valueObject, value)
+  if value == 0 then return end
+  midi.sendSysex(globalPort, concat(PEAK_SYSEX, {0x40,0x00,0x00,0x00,0x00,0x00}))
+end
+
+-- ── Simplified assignParam (single mode only) ──────────────────────────────
+function assignParam()
+  if not sysExPatch[2] then return end
+  local sysEx2Param = {{2,0,10001},{3,0,10002}, ... } -- your full mapping table
+  
+  for i = 1, #sysEx2Param do
+    local sysExByte = sysEx2Param[i][1]
+    local parType   = sysEx2Param[i][2] % 10
+    local parNum    = sysEx2Param[i][3]
+    local value     = sysExPatch[sysExByte]
+    
+    if sysEx2Param[i][2] == 12 then
+      value = 64 * (sysExPatch[sysExByte] * 2 + getBits(sysExPatch[sysExByte+1], 2, 1))
+    end
+    
+    parameterMap.set(currentDevice:getId(), parType, parNum, value)
+  end
+  
+  -- Update info bar with patch name
+  local patchName = ""
+  for j = 0, 15 do
+    local ch = parameterMap.get(currentDevice:getId(), PT_VIRTUAL, 10001+j)
+    if ch and ch ~= 0 then patchName = patchName .. string.char(ch) end
+  end
+  if #patchName > 0 then info.setText(string.sub(patchName, 1, 20)) end
+end
+
+-- ── Simplified midi.onSysex (single mode only) ──────────────────────────────
+function midi.onSysex(midiInput, sysexBlock)
+  local function isSummit()
+    return sysexBlock:peek(1) == 0xF0 and sysexBlock:peek(2) == 0x00
+       and sysexBlock:peek(3) == 0x20 and sysexBlock:peek(4) == 0x29
+       and sysexBlock:peek(5) == 0x01 and sysexBlock:peek(6) == 0x10
+       and sysexBlock:peek(7) == 0x00 and sysexBlock:peek(8) == 0x7E
+  end
+  if not isSummit() then return end
+  
+  local cmd = sysexBlock:peek(9)
+  local len = sysexBlock:getLength()
+  print("Summit sysex message received on interface= " .. midiInput.interface..", cmd=0x"..string.format("%02X",cmd).." len="..len)
+
+  -- Single patch name dump (cmd=0x01)
+  if len > 33 and cmd == 0x01 then
+    local bankNum  = sysexBlock:peek(13)
+    local patchNum = sysexBlock:peek(14)
+    nameBank[bankNum][patchNum] = ""
+    for i = 0, 15 do
+      nameBank[bankNum][patchNum] = nameBank[bankNum][patchNum] .. string.char(sysexBlock:peek(17+i))
+    end
+    if patchNum < 127 and parameterMap.get(globalDevice:getId(), PT_VIRTUAL, 10024) == 1 then
+      midi.sendSysex(globalPort, concat(PEAK_SYSEX, {0x41,0x00,0x00,0x00,bankNum,patchNum+1}))
+    elseif parameterMap.get(globalDevice:getId(), PT_VIRTUAL, 10024) == 1 then 
+      bankNamesLoaded[bankNum] = true
+      parameterMap.set(currentDevice:getId(), PT_VIRTUAL, 10024, 0)
+    end
+
+  -- Current single patch (cmd=0x00, len=527)
+  elseif len == 527 and cmd == 0x00 then
+    for i = 1, 512 do sysExPatch[i] = sysexBlock:peek(i+15) end
+    assignParam()
+
+  -- Global settings response (cmd=0x04)
+  elseif cmd == 0x04 then
+    for i = 1, math.min(len-17, 64) do
+      sysExGlobal[i] = sysexBlock:peek(i+15)
+    end
+    assignGlobalSettings()
+
+  -- User wavetable name response (cmd=0x07, len=23)
+  elseif len == 23 and cmd == 0x07 then
+    local waveName = ""
+    for i = 1, 7 do 
+      waveName = waveName .. string.char(sysexBlock:peek(i+15))
+    end
+    waveTableNames[sysexBlock:peek(15)] = waveName
+  end
+end
+
+-- ── MIDI control change ────────────────────────────────────────────────────────
+function midi.onControlChange(midiInput, ch, controllerNumber, value)
+  if controllerNumber == 32 then
+    parameterMap.set(globalDevice:getId(), PT_VIRTUAL, 10032, value)
+  elseif controllerNumber == 99 then
+    msbNum = value
+  elseif controllerNumber == 98 then
+    lsbNum = value
+  elseif controllerNumber == 6 then
+    local nrpn = 128*msbNum + lsbNum
+    parameterMap.set(currentDevice:getId(), PT_VIRTUAL, nrpn, value)
+  end
+end
+
+-- ── Parameter map change ────────────────────────────────────────────────────────
+function parameterMap.onChange(valueObjects, origin, midiValue)
+  if origin ~= INTERNAL then return end
+  local msg = valueObjects[1]:getMessage()
+  local parameterNumber = msg:getParameterNumber()
+  if msg:getType() == PT_VIRTUAL and parameterNumber < 10000 then
+    sendSimpleNRPN(parameterNumber, midiValue, currentChannel)
+  end
+end
