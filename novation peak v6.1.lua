@@ -9,7 +9,7 @@ local port = device:getPort()
 local channel = device:getChannel()
 
 -- set timer interval for requesting each of 512 patch dumps for patch name extraction
-timer.setPeriod(180) -- 200 ms
+timer.setPeriod(200) -- 200 ms
 
 -- events to track
 events.subscribe(PAGES | POTS)
@@ -171,12 +171,9 @@ function ahdsrValueName(valueObject, value)
   -- print ("ctl = "..id..", base Name = "..ahdsrBaseNames[id])
 end
 
-function semiTones(valueObject,value) ---- 
-  if value > 0 then 
-    return string.format ("%.1f st", value*12/127)
-  else
-    return string.format ("%.1f st", value*12/128)
-  end
+function semiTones(valueObject, value)
+  if value > 0 then return string.format("%.1f st", value*12/127)
+  else return string.format("%.1f st", value*12/128) end
 end
 
 function percent(valueObject,value) ---- 
@@ -186,7 +183,6 @@ end
 function st(valueObject,value) ---- 
   return string.format ("%d st", value)
 end
-
 
 function convertToPhase(valueObject,value) ---- 
   return string.format ("%d deg", (value-1)*3)
@@ -284,14 +280,14 @@ function voiceMode(valueObject, value)
   for _,id in ipairs({156,168}) do controls.get(id):setVisible(not visiBool) end -- lfo common sync
 end
 
-function unison(valueObject, value)
-  controls.get(48):setColor(value == 0 and 0x202020 or WHITE)
-end
-
 function egLoop(valueObject, value)
   local parameter = valueObject:getMessage():getParameterNumber()
   local egNumber = parameter - 3226
   controls.get(({119,131,143})[egNumber]):setVisible(value == 1) -- repeats
+end
+
+function unison(valueObject, value)
+  controls.get(48):setColor(value == 0 and 0x202020 or WHITE)
 end
 
 function glide(valueObject, value)
@@ -509,7 +505,7 @@ function midi.onSysex(midiInput, sysexBlock)
       nameBank[bankNum][patchNum]= nameBank[bankNum][patchNum]..string.char(sysexBlock:peek(17+i))
     end
 
-  -- patch from edit buffer received
+  -- patch from edit buffer received (no bank or patch number)
   elseif len == 527 and cmd == 0x00 then 
     print("patch from edit buffer received")
     for i = 1,512 do
