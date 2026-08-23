@@ -1,4 +1,4 @@
--- Novation PEAK preset by @NewIgnis as modified by @kiwigrass for PEAK
+-- Novation PEAK preset v6.1 by @NewIgnis as modified by @kiwigrass for PEAK
 -- 23/08/2026
 local authorDate = "New Ignis Kiwigrass"
 info.setText(authorDate)
