@@ -181,8 +181,12 @@ function percent(valueObject,value) ----
   return string.format ("%d %%", value)
 end
 
+function cent(valueObject,value) ---- 
+  return string.format ("%d cents", value)
+end
+
 function st(valueObject,value) ---- 
-  return string.format ("%d st", value)
+  return string.format ("%d semitones", value)
 end
 
 function convertToPhase(valueObject,value) ---- 
@@ -509,7 +513,7 @@ function midi.onSysex(midiInput, sysexBlock)
   -- settings received
   elseif len == 527 and cmd == 0x04 then 
     print("settings received")
-    for i = 1,512 do
+    for i = 1,511 do
       sysExSettings[i]=sysexBlock:peek(i+15)
     end
     assignSettings()
