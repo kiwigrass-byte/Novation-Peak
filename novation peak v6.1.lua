@@ -1,5 +1,5 @@
 -- Novation PEAK preset by @NewIgnis as modified by @kiwigrass for PEAK
--- 18/07/2026
+-- 23/08/2026
 local authorDate = "New Ignis Kiwigrass"
 info.setText(authorDate)
 
@@ -548,6 +548,7 @@ end
 
 function midi.onProgramChange(midiInput, channel, programNumber)
   parameterMap.set(deviceId, PT_VIRTUAL, 10033, programNumber) -- updates patch number parameter if change patch on the Peak
+  getPatch(nil,1)
 end
 
 function parameterMap.onChange(valueObjects, origin, midiValue)
