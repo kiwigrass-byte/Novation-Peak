@@ -353,14 +353,6 @@ function selectIt(valueObject, value)
 end
 
 --------------------------------- MIDI request functions ----------------------------------------------------------
--- request patch j data from bank i 
-function getSelectIt(valueObject, value)
-  if value == 0 then return end
-  local bankNum = parameterMap.get (deviceId, PT_VIRTUAL, 10032)
-  local progNum = parameterMap.get (deviceId, PT_VIRTUAL, 10033)
-  midi.sendSysex (port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41,0x00,0x00,0x00, bankNum, patchNum}) 
-end
-
 -- request current patch data from edit buffer without a program change message sent first (if patch selected on Peak rather than E1)
 function getPatch(valueObject, value)
   if value == 0 then return end
