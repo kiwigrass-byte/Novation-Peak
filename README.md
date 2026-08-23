@@ -1,4 +1,4 @@
-# Novation Peak with Patch Parsing V6.1
+# Novation Peak with Patch Parsing V6.2
 
 ---
 - Based closely on V6 of Novation Summit preset by @NewIgnis, using the Peak sysEx header and including only Peak relevant parameters.
@@ -10,10 +10,11 @@
 ---
 **What's in the preset**
 - Automatic parsing of a patch when a new patch is selected.
+- Automatic detection of Peak's MIDI channel.
 - Preset parameters will update when changed on the Peak.
 - The "Patch Select"  buttons send a program change message before loading the patch data.  
 - "Bank Names" retrieves all the patch names from all banks. The button should toggle to an 'off' state after all 512 names are read. The patch number fader will then display the patch names when scrolling. This process takes about 2 minutes to complete.
-- A subset of the Peak's global settings can be changed from the preset. This feature sends the sysEx message only when the pot is released.
+- A subset of the Peak's global settings can be changed from the preset. 
 - The names of the 10 user wavetables are displayed when selected. 
 - Various controls darken or are hidden when not in use.
 ----
