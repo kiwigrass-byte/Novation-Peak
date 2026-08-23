@@ -18,6 +18,7 @@ events.subscribe(PAGES | POTS)
 function preset.onLoad()
   getAllWaveNames(nil, 1)
   getSettings(nil,1) 
+  pages.display(12)
 end
 
 local sysExPatch = {}   -- sysExPatch[byte] – store patch data
