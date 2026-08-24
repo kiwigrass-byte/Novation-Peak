@@ -1,0 +1,28 @@
+-- Define a table to hold our storable preset data
+local storedPresetData = {
+    oscWave = 2,
+    cutoffVal = 85,
+    resonanceVal = 12
+}
+
+-- Function to save current state
+function saveMyPreset()
+    persist(storedPresetData)
+    print("State Saved!")
+end
+
+-- Function to load saved state
+function loadMyPreset()
+    local loadedData = recall(storedPresetData)
+    if loadedData then
+        storedPresetData = loadedData
+        print("State Recalled!")
+    else
+        print("No Saved Data Found")
+    end
+end
+
+-- Hook into preset load event
+function preset.onLoad()
+    loadMyPreset()
+end
