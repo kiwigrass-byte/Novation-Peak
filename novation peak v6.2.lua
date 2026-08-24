@@ -1,5 +1,4 @@
--- Novation PEAK preset v6.2 by @NewIgnis as modified by @kiwigrass for PEAK
--- 23/08/2026
+-- Novation PEAK preset v6.2
 local authorDate = "New Ignis Kiwigrass"
 info.setText(authorDate)
 
@@ -172,7 +171,7 @@ end
 -- captured the first time each control is seen so repeat updates don't keep
 -- stacking suffixes onto an already-modified name.
 
-local ahdsrBaseNames = {}
+local ahdsrBaseNames = setmetatable({}, {__mode = "k"})
 
 function ahdsrValueName(valueObject, value)
   local ctrl = valueObject:getControl()
@@ -229,45 +228,33 @@ function modGreen(valueObject, value)
   return string.format("%d", value)
 end
 
-function lightBlue(valueObject, value)
-  valueObject:getControl():setColor(value == 0 and 0x202067 or BLUE)
-  return string.format("%d", value)
+-- set color formatters for controls
+local colorConfigs = {
+  blue   = { off = 0x202067, on = BLUE },
+  orange = { off = 0x572700, on = ORANGE },
+  green = { off = 0x003930, on = GREEN },
+  yellow = { off = 0x505000, on = 0xF1F50E },
+  white = { off =  0x202020, on = 0xFFFFFF },
+  grey = { off = 0x101010, on =  0x6F6F6F },
+  red = { off = 0x401010, on = RED },
+  purple = { off = 0x401040, on = PURPLE},
+}
+
+local function makeColorFormatter(colorConfig)
+  return function(valueObject, value)
+    valueObject:getControl():setColor(value == 0 and colorConfig.off or colorConfig.on)
+    return string.format("%d", value)
+  end
 end
 
-function colOrange(valueObject, value)
-  valueObject:getControl():setColor(value == 0 and 0x572700 or ORANGE)
-  return string.format("%d", value)
-end
-
-function colGreen(valueObject, value)
-  valueObject:getControl():setColor(value == 0 and 0x003930 or GREEN)
-  return string.format("%d", value)
-end
-
-function colYellow(valueObject, value)
-  valueObject:getControl():setColor(value == 0 and 0x505000 or 0xF1F50E)
-  return string.format("%d", value)
-end
-
-function colWhite(valueObject, value)
-  valueObject:getControl():setColor(value == 0 and 0x202020 or 0xFFFFFF)
-  return string.format("%d", value)
-end
-
-function colGrey(valueObject, value)
-  valueObject:getControl():setColor(value == 0 and 0x101010 or 0x6F6F6F)
-  return string.format("%d", value)
-end
-
-function colRed(valueObject, value)
-  valueObject:getControl():setColor(value == 0 and 0x401010 or RED)
-  return string.format("%d", value)
-end
-
-function colPurple(valueObject, value)
-  valueObject:getControl():setColor(value == 0 and 0x401040 or PURPLE)
-  return string.format("%d", value)
-end
+lightBlue = makeColorFormatter(colorConfigs.blue)
+colOrange = makeColorFormatter(colorConfigs.orange)
+colGreen = makeColorFormatter(colorConfigs.green)
+colYellow = makeColorFormatter(colorConfigs.yellow)
+colWhite = makeColorFormatter(colorConfigs.white)
+colGrey = makeColorFormatter(colorConfigs.grey)
+colRed = makeColorFormatter(colorConfigs.red)
+colPurple = makeColorFormatter(colorConfigs.purple)
 
 -- visibility options for wave shape options
 function waveChange(valueObject, value)
@@ -416,11 +403,14 @@ local function stopPatchScanner()
   print("Patch scanner stopped")
 end
 
+local SCAN_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41, 0x00, 0x00, 0x00}
+
 -- Timer callback (called by Electra One runtime)
 function timer.onTick()
   if not patchScanState.isRunning then return end
   -- Send the sysex request for current bank/patch
-  midi.sendSysex( port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41,0x00,0x00,0x00, patchScanState.bank, patchScanState.patch}  )
+  local msg = concat(SCAN_HEADER, {patchScanState.bank, patchScanState.patch})
+  midi.sendSysex(port, msg)
   print(string.format("Requesting Bank %d, Patch %03d", patchScanState.bank, patchScanState.patch))
   -- Advance to next patch
   patchScanState.patch = patchScanState.patch + 1
@@ -438,7 +428,7 @@ function timer.onTick()
   end
 end
 
--- assigns sysEx MIDI values from received patch to corresponding preset parameter values
+-- assigns sysEx MIDI values from received patch to corresponding preset parameter values: {byte #, parameter type, nrpn #}
 function assignParam()   
   if not sysExPatch[2] then return end -- do not process if not parsed
   local sysEx2Param = {{2,0,10001},{3,0,10002},{4,0,10003},{5,0,10004},{6,0,10005},{7,0,10006},{8,0,10007},{9,0,10008},{10,0,10009},{11,0,10010},{12,0,10011},{13,0,10012},{14,0,10013},{15,0,10014},{16,0,10015},{17,0,10016},{34,0,2},{35,0,3},{36,0,4},
