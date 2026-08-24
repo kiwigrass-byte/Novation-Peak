@@ -1,4 +1,5 @@
 -- Novation PEAK preset v6.2
+-- 08/24/26
 local authorDate = "New Ignis Kiwigrass"
 info.setText(authorDate)
 
@@ -51,7 +52,17 @@ end
 curCtl   = -1
 
 -- control Ids for the controls that I only want to send MIDI data after I have released the knob
-releaseCtls = {318,356,357,358} -- control # of master clock fader, transpose fader, master fine tune fader, velocity curve 
+local releaseCtls = {318,356,357,358} -- control # of master clock fader, transpose fader, master fine tune fader, velocity curve 
+
+-- helper function to find match between touched control and target list of controls
+local function get_key_for_value(t, value) 
+   if (t ~= nil) then
+      for k,v in pairs(t) do
+         if v==value then return k end
+      end
+   end
+   return nil
+end
 
 function events.onPotTouchChange(potId, controlId, touched)
   local idx = get_key_for_value(releaseCtls,controlId)
@@ -78,16 +89,8 @@ function events.onPotTouchChange(potId, controlId, touched)
   end
 end
 
-function get_key_for_value(t, value) -- helper function to find match between touched control and target list of controls
-   if (t ~= nil) then
-      for k,v in pairs(t) do
-         if v==value then return k end
-      end
-   end
-   return nil
-end
-
-function findArrayByValue(tbl, targetValue1,targetValue2) -- helper function to find target array from a table of arrays
+-- helper function to find target array from a table of arrays
+local function findArrayByValue(tbl, targetValue1,targetValue2) 
     for i, arr in ipairs(tbl) do
         if arr[1] == targetValue1 and arr[2] == targetValue2 then
             return arr
@@ -96,7 +99,8 @@ function findArrayByValue(tbl, targetValue1,targetValue2) -- helper function to 
     return nil -- not found
 end
 
-function getBits(value, start, length) -- helper function to get a specific bit series from a value
+-- helper function to get a specific bit series from a value
+local function getBits(value, start, length) 
     -- Calculate the mask by shifting (1 << length) - 1 to the correct position
     local mask = (1 << length) - 1
     -- Shift the mask to the starting position and apply it to the value
@@ -104,7 +108,7 @@ function getBits(value, start, length) -- helper function to get a specific bit 
 end
 
 -- helper function to concatenate two arrays. Used for SysEx message construction
-function concat(t1, t2)
+local function concat(t1, t2)
   local t = {}
   for i=1,#t1 do t[#t+1] = t1[i] end
   for i=1,#t2 do t[#t+1] = t2[i] end
@@ -119,7 +123,7 @@ end
 
 -- display formatter functions ---------------------------------------------------------------------
 -- Wavetable name lookup 
-waveTableNames = {
+local waveTableNames = {
   [4]="BS Sine",   [5]="Random",   [6]="Zing",      [7]="Tubey",    [8]="Octaves",
   [9]="Wobbler",   [10]="Chords",  [11]="Didgery",  [12]="Harsh",   [13]="Organ",
   [14]="E.Piano",  [15]="VoxOooEe",[16]="VoxYahEe", [17]="Winds",   [18]="SoftClav",
