@@ -273,7 +273,7 @@ end
 -- captured the first time each control is seen so repeat updates don't keep
 -- stacking suffixes onto an already-modified name.
 
-local ahdsrBaseNames = setmetatable({}, {__mode = "k"})
+local ahdsrBaseNames = setmetatable({}, {__mode = "v"})
 
 function ahdsrValueName(valueObject, value)
   local ctrl = valueObject:getControl()
@@ -305,35 +305,10 @@ function convertToPhase(valueObject,value) ----
   return string.format ("%d deg", (value-1)*3)
 end
 
--- Mod matrix depth formatters – colour-code src/dst controls and refresh the visualisation
-function modWhite(valueObject, value)
-  local id = valueObject:getControl():getId()
-  local color = (value == 0) and 0x202020 or WHITE
-  controls.get(id-6):setColor(color); controls.get(id-5):setColor(color)
-  controls.get(id  ):setColor(color); controls.get(id+1):setColor(color)
-  return string.format("%d", value)
-end
-
-function modOrange(valueObject, value)
-  local id = valueObject:getControl():getId()
-  local color = (value == 0) and 0x202020 or ORANGE
-  controls.get(id-6):setColor(color); controls.get(id-5):setColor(color)
-  controls.get(id  ):setColor(color); controls.get(id+1):setColor(color)
-  return string.format("%d", value)
-end
-
-function modGreen(valueObject, value)
-  local id = valueObject:getControl():getId()
-  local color = (value == 0) and 0x202020 or GREEN
-  controls.get(id-6):setColor(color); controls.get(id-5):setColor(color)
-  controls.get(id  ):setColor(color); controls.get(id+1):setColor(color)
-  return string.format("%d", value)
-end
-
 -- ============================================================
 -- Generic "dim group" helper
 -- A "group" is a set of slots. Each slot has:
---   - one or more trigger param numbers (any of them == 0 -> dim)
+--   - one or more trigger param numbers (all of them == 0 -> dim)
 --   - a list of control ids that get recolored together
 --   - an on/off color pair (either per-slot or shared per-group)
 -- ============================================================
@@ -355,21 +330,24 @@ local function makeDimGroup(def)
   end
 
   function group:colorFor(i)
-    if self.colors[1] and self.colors[1].off then
-      return self.colors[1] -- shared single color config
+    if self.colors.off then
+      return self.colors -- shared single color config
     end
-    return self.colors[i]
+    return self.colors[((i - 1) % #self.colors) + 1]
   end
 
   function group:update(i)
     local cfg = self:colorFor(i)
     if not cfg then return end
 
-    local dim = false
+    local dim = true
     for _, p in ipairs(self.triggerParams[i]) do
       local v = parameterMap.get(deviceId, PT_VIRTUAL, p)
       if v == nil then return end -- not read yet; don't touch color
-      if v == 0 then dim = true end
+      if v ~= 0 then
+        dim = false
+        break
+      end
     end
 
     local color = dim and cfg.off or cfg.on
@@ -406,30 +384,62 @@ local colorConfigs = {
 -- ---------------- Mod matrix (16 slots, source+dest triggers) ----------------
 local PARAM_MOD_SOURCE_A   = {128,256,384,512,640,768,896,1024,1152,1280,1408,1536,1664,1792,1920,2048}
 local PARAM_MOD_SOURCE_B   = {129,257,385,513,641,769,897,1025,1153,1281,1409,1537,1665,1793,1921,2049}
-local PARAM_MOD_DEST       = {131,259,387,515,643,771,899,1027,1155,1283,1411,1539,1667,1795,1923,2051}
-local CTRL_MOD_SOURCE_A    = {217,218,219,220,221,222,229,230,231,232,233,234,241,242,243,244}
-local CTRL_MOD_SOURCE_B    = {245,246,253,254,255,256,257,258,265,266,267,268,269,270,277,278}
+local CTRL_MOD_SOURCE_A    = {217,219,221,229,231,233,241,243,245,253,255,257,265,267,269,277}
+local CTRL_MOD_SOURCE_B    = {218,220,222,230,232,234,242,244,246,254,256,258,266,268,270,278}
 local CTRL_MOD_DEST       = {224,226,228,236,238,240,248,250,252,260,262,264,272,274,276,284}
 local CTRL_MOD_AMOUNT      = {223,225,227,235,237,239,247,249,251,259,261,263,271,273,275,283}
 
+local PARAM_MOD_FX_SOURCE_A = {2176,2304,2432,2560}
+local PARAM_MOD_FX_SOURCE_B = {2177,2305,2433,2561}
+local CTRL_MOD_FX_SOURCE_A = {289,291,293,301}
+local CTRL_MOD_FX_SOURCE_B = {290,292,294,302}
+local CTRL_MOD_FX_DEST    = {296,298,300,308}
+local CTRL_MOD_FX_AMOUNT  = {295,297,299,307}
+
 local modTriggerParams, modControlIds = {}, {}
+local modFxTriggerParams, modFxControlIds = {}, {}
+
 for i = 1, 16 do
-  modTriggerParams[i] = { PARAM_MOD_SOURCE_A[i], PARAM_MOD_SOURCE_B[i] }
-  modControlIds[i]    = { CTRL_MOD_SOURCE_A[i], CTRL_MOD_SOURCE_B[i], CTRL_MOD_DEST[i], CTRL_MOD_AMOUNT[i] }
+  modTriggerParams[i] = { PARAM_MOD_SOURCE_A[i], PARAM_MOD_SOURCE_B[i], }
+  modControlIds[i]    = { CTRL_MOD_SOURCE_A[i], CTRL_MOD_SOURCE_B[i], CTRL_MOD_DEST[i], CTRL_MOD_AMOUNT[i], }
+end
+
+for i = 1, 4 do
+  modFxTriggerParams[i] = { PARAM_MOD_FX_SOURCE_A[i], PARAM_MOD_FX_SOURCE_B[i], }
+
+  modFxControlIds[i] = { CTRL_MOD_FX_SOURCE_A[i], CTRL_MOD_FX_SOURCE_B[i], CTRL_MOD_FX_DEST[i], CTRL_MOD_FX_AMOUNT[i], }
 end
 
 local modGroup = makeDimGroup{
   triggerParams = modTriggerParams,
   controlIds    = modControlIds,
-  colors        = { colorConfigs.white, },
+  colors        = {
+    colorConfigs.white,
+    colorConfigs.orange,
+    colorConfigs.green,
+  },
 }
 
-function destination(valueObject, value)
-  local ctrlId = valueObject:getControl():getId()
---  controls.get(ctrlId):setName(DESTINATION[value])
-  modGroup:onCtrlChange(ctrlId)
-  return value
+local modFxGroup = makeDimGroup{
+  triggerParams = modFxTriggerParams,
+  controlIds = modFxControlIds,
+  colors = {
+    colorConfigs.white,
+    colorConfigs.orange,
+    colorConfigs.green,
+  },
+}
+
+-- update the dim status of mod matrix controls depending on value of source A and B
+local function makeSourceHandler(group)
+  return function(valueObject, value)
+    group:onCtrlChange(valueObject:getControl():getId())
+    return value
+  end
 end
+
+source   = makeSourceHandler(modGroup)
+sourceFx = makeSourceHandler(modFxGroup) 
 
 -- visibility options for wave shape options
 function waveChange(valueObject, value)
@@ -637,6 +647,11 @@ function assignParam()
     end
     parameterMap.set (deviceId, parType, parNum, value)
   end
+  -- Re-evaluate all modulation slots after the complete patch has been parsed.
+  -- A slot is dimmed only when both source parameters are zero.
+  modGroup:updateAll()
+  modFxGroup:updateAll()
+
   -- Update info bar with patch name
   local patchName = ""
   for j = 0, 15 do
