@@ -11,7 +11,7 @@
 - Automatic detection of Peak's MIDI channel.
 - Preset parameters will update when changed on the Peak.
 - The **Patch Select**  buttons send a program change message before loading the patch data.  
-- Turning the **Bank Names** switch 'on' retrieves all the patch names from all banks. The button should toggle to an 'off' state after all 512 names are read. The patch number fader will then display the patch names when scrolling. This process takes about 2 minutes to complete. The patch names are stored on the E1 and are loaded immediately when the preset loads. If you change patches on the Peak or move the preset to a different slot then repeat the process.
+- Turning the **Bank Names** switch 'on' retrieves all the patch names from all banks. The button should toggle to an 'off' state after all 512 names are read. The patch number fader will then display the patch names when scrolling. This process takes about 2 minutes to complete. The patch names are stored on the E1 and are loaded when the preset loads. If you change patches on the Peak or move the preset to a different slot then repeat the process.
 - The **Compare** switch provides a real time comparison of the live patch to the parsed patch.
 - A subset of the Peak's global settings (dark blue) can be changed from the preset. 
 - The names of the 10 user wavetables are displayed when selected. 
