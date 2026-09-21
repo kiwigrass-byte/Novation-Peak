@@ -1,4 +1,4 @@
-# Novation Peak with Patch Parsing V6.3
+# Novation Peak with Patch Parsing V6.4
 
 ---
 - Based closely on V6 of Novation Summit preset by @NewIgnis, using the Peak sysEx header and including only Peak relevant parameters.
