@@ -381,14 +381,14 @@ local colorConfigs = {
   purple = { off = 0x401040, on = PURPLE },
 }
 
--- ---------------- Mod matrix (16 slots, source+dest triggers) ----------------
+-- ---------------- Mod matrix (16 slots, source triggers) ----------------
 local PARAM_MOD_SOURCE_A   = {128,256,384,512,640,768,896,1024,1152,1280,1408,1536,1664,1792,1920,2048}
 local PARAM_MOD_SOURCE_B   = {129,257,385,513,641,769,897,1025,1153,1281,1409,1537,1665,1793,1921,2049}
 local CTRL_MOD_SOURCE_A    = {217,219,221,229,231,233,241,243,245,253,255,257,265,267,269,277}
 local CTRL_MOD_SOURCE_B    = {218,220,222,230,232,234,242,244,246,254,256,258,266,268,270,278}
 local CTRL_MOD_DEST       = {224,226,228,236,238,240,248,250,252,260,262,264,272,274,276,284}
 local CTRL_MOD_AMOUNT      = {223,225,227,235,237,239,247,249,251,259,261,263,271,273,275,283}
-
+-- ---------------- FX Mod matrix (4 slots, source triggers) ----------------
 local PARAM_MOD_FX_SOURCE_A = {2176,2304,2432,2560}
 local PARAM_MOD_FX_SOURCE_B = {2177,2305,2433,2561}
 local CTRL_MOD_FX_SOURCE_A = {289,291,293,301}
@@ -406,7 +406,6 @@ end
 
 for i = 1, 4 do
   modFxTriggerParams[i] = { PARAM_MOD_FX_SOURCE_A[i], PARAM_MOD_FX_SOURCE_B[i], }
-
   modFxControlIds[i] = { CTRL_MOD_FX_SOURCE_A[i], CTRL_MOD_FX_SOURCE_B[i], CTRL_MOD_FX_DEST[i], CTRL_MOD_FX_AMOUNT[i], }
 end
 
