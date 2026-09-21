@@ -414,7 +414,7 @@ local CTRL_MOD_AMOUNT      = {223,225,227,235,237,239,247,249,251,259,261,263,27
 
 local modTriggerParams, modControlIds = {}, {}
 for i = 1, 16 do
-  modTriggerParams[i] = { PARAM_MOD_SOURCE_A[i], PARAM_MOD_SOURCE_B[i], PARAM_MOD_DEST[i] }
+  modTriggerParams[i] = { PARAM_MOD_SOURCE_A[i], PARAM_MOD_SOURCE_B[i] }
   modControlIds[i]    = { CTRL_MOD_SOURCE_A[i], CTRL_MOD_SOURCE_B[i], CTRL_MOD_DEST[i], CTRL_MOD_AMOUNT[i] }
 end
 
