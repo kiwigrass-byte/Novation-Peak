@@ -642,15 +642,6 @@ local function scaledAmount(base, factor)
   return v
 end
 
-local function applyMacroToAll(factorOverride)
-  macroApplying = true
-  local factor = factorOverride or macroFactor()
-  for i = 1, 16 do
-    parameterMap.set(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i], scaledAmount(modAmountBase[i], factor))
-  end
-  macroApplying = false
-end
-
 -- percentage display for the macro control
 function displayMacroPercent(valueObject, value)
   local factor
@@ -663,6 +654,66 @@ function displayMacroPercent(valueObject, value)
   end
   local percent = math.floor(factor * 100 + 0.5)
   return string.format("%+d %%", percent)
+end
+
+-- ---------------- Mod amount lock toggles ----------------
+-- 16 boolean locks, one per mod slot. When locked, the macro knob will
+-- NOT rewrite that slot's PARAM_MOD_AMOUNT value — it stays exactly where
+-- the user last set it, regardless of macro position.
+
+local PARAM_MOD_LOCK = { 10050, 10051, 10052, 10053, 10054, 10055, 10056, 10057,
+                      10058, 10059, 10060, 10061,10062, 10063, 10064, 10065, }
+
+local CTRL_MOD_LOCK = { 399, 400, 401, 402, 403, 404, 405, 406,
+                    407, 408, 414, 415, 416, 417, 420, 421, }
+
+local PARAM_MOD_LOCK_INDEX = {}
+for i, p in ipairs(PARAM_MOD_LOCK) do PARAM_MOD_LOCK_INDEX[p] = i end
+
+local modAmountLocked = {}
+for i = 1, 16 do modAmountLocked[i] = false end
+
+local lockColors = { off = 0x202020, on = RED }
+
+-- bound to the 16 lock toggle controls.
+function lockToggle(valueObject, value)
+  local parameter = valueObject:getMessage():getParameterNumber()
+  local idx = PARAM_MOD_LOCK_INDEX[parameter]
+  if not idx then return value end
+
+  modAmountLocked[idx] = (value ~= 0)
+
+  local ctrl = controls.get(CTRL_MOD_LOCK[idx])
+  if ctrl then
+    ctrl:setColor( modAmountLocked[idx] and lockColors.on or lockColors.off )
+  end
+
+  return value
+end
+
+-- This is the actual macro write guard.
+-- If the lock param is nonzero, skip that mod-amount write.
+local function applyMacroToAll(factorOverride, ignoreLocks)
+  macroApplying = true
+  local factor = factorOverride or macroFactor()
+
+  for i = 1, 16 do
+    local lockValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i]) or 0
+    local isLocked = (lockValue ~= 0)
+
+    if (not ignoreLocks) and isLocked then
+      -- skip locked mod amount
+    else
+      parameterMap.set(
+        deviceId,
+        PT_VIRTUAL,
+        PARAM_MOD_AMOUNT[i],
+        scaledAmount(modAmountBase[i], factor)
+      )
+    end
+  end
+
+  macroApplying = false
 end
 
 -- ---------------- COMPARE_IT / macro sync ----------------
@@ -797,7 +848,7 @@ function compareIt(valueObject, value)
 
     -- Always show/hear the TRUE parsed patch values while comparing,
     -- regardless of where the macro knob currently sits.
-    applyMacroToAll(1)
+    applyMacroToAll(1,true)
 
     print("COMPARE_IT: showing A (true patch values)")
   else
@@ -806,7 +857,7 @@ function compareIt(valueObject, value)
       modAmountBase = copyModAmountBase(macroBaseSnapshotB)
 
       -- Restore whatever the macro knob is actually set to.
-      applyMacroToAll()
+      applyMacroToAll(nil,true)
 
       print("COMPARE_IT: restored B (live, current macro applied)")
     end
