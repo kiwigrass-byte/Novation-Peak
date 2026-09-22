@@ -772,6 +772,8 @@ end
 local snapshotA = nil   -- table indexed same as PATCH_PARAM_MAP: value at time patch was parsed
 local snapshotB = nil   -- table indexed same as PATCH_PARAM_MAP: live/edited values, captured on toggle
 local comparingActive = false
+local snapshotBModAmounts = nil
+
 
 local function computeValueFromBytes(entry, bytes)
   local sysExByte = entry[1]
@@ -795,6 +797,7 @@ local function captureSnapshotA()
   end
   snapshotA = snap
   snapshotB = nil
+  snapshotBModAmounts = nil
 
   -- Mod amounts are captured separately from the parsed parameter state,
   -- as the unscaled base reference for A.
@@ -830,6 +833,20 @@ local function captureLiveAsB()
   return snap
 end
 
+local function captureLiveModAmounts()
+  local amounts = {}
+
+  for i = 1, 16 do
+    amounts[i] = parameterMap.get(
+      deviceId,
+      PT_VIRTUAL,
+      PARAM_MOD_AMOUNT[i]
+    ) or 64
+  end
+
+  return amounts
+end
+
 function compareIt(valueObject, value)
   if not snapshotA then
     print("COMPARE_IT: no patch parsed yet")
@@ -840,15 +857,15 @@ function compareIt(valueObject, value)
 
   if value == 1 then
     snapshotB = captureLiveAsB()
+    snapshotBModAmounts = captureLiveModAmounts()
     macroBaseSnapshotB = copyModAmountBase(modAmountBase)
     comparingActive = true
 
     applySnapshot(snapshotA)
     modAmountBase = copyModAmountBase(macroBaseSnapshotA)
 
-    -- Always show/hear the TRUE parsed patch values while comparing,
-    -- regardless of where the macro knob currently sits.
-    applyMacroToAll(1,true)
+    -- Show the true parsed patch values, ignoring locks.
+    applyMacroToAll(1, true)
 
     print("COMPARE_IT: showing A (true patch values)")
   else
@@ -856,11 +873,32 @@ function compareIt(valueObject, value)
       applySnapshot(snapshotB)
       modAmountBase = copyModAmountBase(macroBaseSnapshotB)
 
-      -- Restore whatever the macro knob is actually set to. But still respect active locks
+      -- Restore live values for locked mod amounts.
+      if snapshotBModAmounts then
+        for i = 1, 16 do
+          local lockValue = parameterMap.get(
+            deviceId,
+            PT_VIRTUAL,
+            PARAM_MOD_LOCK[i]
+          ) or 0
+
+          if lockValue ~= 0 then
+            parameterMap.set(
+              deviceId,
+              PT_VIRTUAL,
+              PARAM_MOD_AMOUNT[i],
+              snapshotBModAmounts[i]
+            )
+          end
+        end
+      end
+
+      -- Apply the current macro to unlocked slots only.
       applyMacroToAll()
 
       print("COMPARE_IT: restored B (live, current macro applied)")
     end
+
     comparingActive = false
   end
 
