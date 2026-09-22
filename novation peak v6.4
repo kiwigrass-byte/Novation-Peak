@@ -642,9 +642,9 @@ local function scaledAmount(base, factor)
   return v
 end
 
-local function applyMacroToAll()
+local function applyMacroToAll(factorOverride)
   macroApplying = true
-  local factor = macroFactor()
+  local factor = factorOverride or macroFactor()
   for i = 1, 16 do
     parameterMap.set(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i], scaledAmount(modAmountBase[i], factor))
   end
@@ -794,15 +794,21 @@ function compareIt(valueObject, value)
 
     applySnapshot(snapshotA)
     modAmountBase = copyModAmountBase(macroBaseSnapshotA)
-    applyMacroToAll()
 
-    print("COMPARE_IT: showing A (unedited baseline)")
+    -- Always show/hear the TRUE parsed patch values while comparing,
+    -- regardless of where the macro knob currently sits.
+    applyMacroToAll(1)
+
+    print("COMPARE_IT: showing A (true patch values)")
   else
     if snapshotB then
       applySnapshot(snapshotB)
       modAmountBase = copyModAmountBase(macroBaseSnapshotB)
+
+      -- Restore whatever the macro knob is actually set to.
       applyMacroToAll()
-      print("COMPARE_IT: restored B (edited state)")
+
+      print("COMPARE_IT: restored B (live, current macro applied)")
     end
     comparingActive = false
   end
