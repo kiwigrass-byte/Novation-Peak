@@ -1,5 +1,5 @@
 -- Novation PEAK preset v6.4
--- 09/21/26
+-- 09/22/26
 local authorDate = "New Ignis Kiwigrass"
 info.setText(authorDate)
 
@@ -135,14 +135,6 @@ local function flushNameBankIfDirty()
     saveNameBank()
     nameBankDirty = false
   end
-end
-
--- request Peak wavetable names and global settings on preset load
-function preset.onLoad()
-  loadNameBank()       -- restore cached patch names first
-  getAllWaveNames(nil, 1)
-  getSettings(nil,1) 
-  pages.display(12)
 end
 
 -- helper function to find target array from a table of arrays
@@ -384,6 +376,8 @@ local colorConfigs = {
 -- ---------------- Mod matrix (16 slots, source triggers) ----------------
 local PARAM_MOD_SOURCE_A   = {128,256,384,512,640,768,896,1024,1152,1280,1408,1536,1664,1792,1920,2048}
 local PARAM_MOD_SOURCE_B   = {129,257,385,513,641,769,897,1025,1153,1281,1409,1537,1665,1793,1921,2049}
+local PARAM_MOD_AMOUNT     = {130,258,386,514,642,770,898,1026,1154,1282,1410,1538,1666,1794,1922,2050}
+
 local CTRL_MOD_SOURCE_A    = {217,219,221,229,231,233,241,243,245,253,255,257,265,267,269,277}
 local CTRL_MOD_SOURCE_B    = {218,220,222,230,232,234,242,244,246,254,256,258,266,268,270,278}
 local CTRL_MOD_DEST       = {224,226,228,236,238,240,248,250,252,260,262,264,272,274,276,284}
@@ -613,6 +607,77 @@ function timer.onTick()
   end
 end
 
+-- ---------------- Mod amount macro bipolar scaling ----------------
+local PARAM_MACRO_KNOB = 10038
+local MACRO_MAX = 16383
+local MACRO_CENTER = 8192
+
+local macroKnobValue = 16383   -- 0-16383, default = full effect (factor 1)
+local macroApplying = false  -- guard to stop applyMacro from re-deriving base
+
+local function macroFactor()
+  if macroKnobValue == MACRO_CENTER then
+    return 0
+  end
+
+  if macroKnobValue < MACRO_CENTER then
+    return (macroKnobValue - MACRO_CENTER) / MACRO_CENTER
+  else
+    return (macroKnobValue - MACRO_CENTER) / (MACRO_MAX - MACRO_CENTER)
+  end
+end
+
+local PARAM_MOD_AMOUNT = {130,258,386,514,642,770,898,1026,1154,1282,1410,1538,1666,1794,1922,2050}
+
+local PARAM_MOD_AMOUNT_INDEX = {}
+for i, p in ipairs(PARAM_MOD_AMOUNT) do PARAM_MOD_AMOUNT_INDEX[p] = i end
+
+local modAmountBase = {}
+for i = 1, 16 do modAmountBase[i] = 64 end
+
+local function scaledAmount(base, factor)
+  local v = 64 + (base - 64) * factor
+  v = math.floor(v + 0.5)
+  if v < 0 then v = 0 elseif v > 127 then v = 127 end
+  return v
+end
+
+local function applyMacroToAll()
+  macroApplying = true
+  local factor = macroFactor()
+  for i = 1, 16 do
+    parameterMap.set(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i], scaledAmount(modAmountBase[i], factor))
+  end
+  macroApplying = false
+end
+
+-- percentage display for the macro control
+function displayMacroPercent(valueObject, value)
+  local factor
+  if value == MACRO_CENTER then
+    factor = 0
+  elseif value < MACRO_CENTER then
+    factor = (value - MACRO_CENTER) / MACRO_CENTER
+  else
+    factor = (value - MACRO_CENTER) / (MACRO_MAX - MACRO_CENTER)
+  end
+  local percent = math.floor(factor * 100 + 0.5)
+  return string.format("%+d %%", percent)
+end
+
+-- ---------------- COMPARE_IT / macro sync ----------------
+local macroBaseSnapshotA = nil
+local macroBaseSnapshotB = nil
+local compareApplying = false
+
+local function copyModAmountBase(src)
+  local t = {}
+  for i = 1, 16 do
+    t[i] = (src and src[i]) or 64
+  end
+  return t
+end
+
 -- ------------------ COMPARE_IT toggle block -----------------------------------
 -- A = parsed edit-buffer state (captured once per patch parse)
 -- B = live/edited parameter state (captured on demand when comparing)
@@ -620,8 +685,7 @@ end
 -- value 1: cache current live state as B, then push A into parameterMap
 -- value 0: push cached B back into parameterMap
 
--- TO DO: a small status indicator so the UI shows “A” vs “B”, a guard that ignores compare until a patch has actually been parsed, a “compare toggle latches and auto-restores B when you turn it back off” refinement
-local PARAM_COMPARE_IT = 10035
+local PARAM_COMPARE_IT = 10037
 
 -- Patch byte -> parameter mapping, shared by assignParam() and the A/B compare logic.
 local PATCH_PARAM_MAP = {
@@ -644,6 +708,16 @@ local PATCH_PARAM_MAP = {
   {390,0,3242},{391,0,3243},{392,0,3244},{393,0,3245}
 }
 
+-- Build once: a fast lookup of parameter numbers that belong to the mod-amount
+-- macro system, so the generic snapshot machinery can skip them entirely.
+local PATCH_PARAM_IS_MOD_AMOUNT = {}
+for i = 1, #PATCH_PARAM_MAP do
+  local parNum = PATCH_PARAM_MAP[i][3]
+  if PARAM_MOD_AMOUNT_INDEX[parNum] then
+    PATCH_PARAM_IS_MOD_AMOUNT[i] = true
+  end
+end
+
 local snapshotA = nil   -- table indexed same as PATCH_PARAM_MAP: value at time patch was parsed
 local snapshotB = nil   -- table indexed same as PATCH_PARAM_MAP: live/edited values, captured on toggle
 local comparingActive = false
@@ -664,28 +738,43 @@ end
 local function captureSnapshotA()
   local snap = {}
   for i = 1, #PATCH_PARAM_MAP do
-    snap[i] = computeValueFromBytes(PATCH_PARAM_MAP[i], sysExPatch)
+    if not PATCH_PARAM_IS_MOD_AMOUNT[i] then
+      snap[i] = computeValueFromBytes(PATCH_PARAM_MAP[i], sysExPatch)
+    end
   end
   snapshotA = snap
-  snapshotB = nil          -- B == A until the user edits something
+  snapshotB = nil
+
+  -- Mod amounts are captured separately from the parsed parameter state,
+  -- as the unscaled base reference for A.
+  for i = 1, 16 do
+    modAmountBase[i] = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i]) or 64
+  end
+  macroBaseSnapshotA = copyModAmountBase(modAmountBase)
+  macroBaseSnapshotB = nil
+
   comparingActive = false
 end
 
 local function applySnapshot(snap)
   if not snap then return end
   for i = 1, #PATCH_PARAM_MAP do
-    local parType = PATCH_PARAM_MAP[i][2] % 10
-    local parNum  = PATCH_PARAM_MAP[i][3]
-    parameterMap.set(deviceId, parType, parNum, snap[i])
+    if not PATCH_PARAM_IS_MOD_AMOUNT[i] and snap[i] ~= nil then
+      local parType = PATCH_PARAM_MAP[i][2] % 10
+      local parNum  = PATCH_PARAM_MAP[i][3]
+      parameterMap.set(deviceId, parType, parNum, snap[i])
+    end
   end
 end
 
 local function captureLiveAsB()
   local snap = {}
   for i = 1, #PATCH_PARAM_MAP do
-    local parType = PATCH_PARAM_MAP[i][2] % 10
-    local parNum  = PATCH_PARAM_MAP[i][3]
-    snap[i] = parameterMap.get(deviceId, parType, parNum)
+    if not PATCH_PARAM_IS_MOD_AMOUNT[i] then
+      local parType = PATCH_PARAM_MAP[i][2] % 10
+      local parNum  = PATCH_PARAM_MAP[i][3]
+      snap[i] = parameterMap.get(deviceId, parType, parNum)
+    end
   end
   return snap
 end
@@ -696,18 +785,29 @@ function compareIt(valueObject, value)
     return
   end
 
+  compareApplying = true
+
   if value == 1 then
-    snapshotB = captureLiveAsB()   -- cache the edited state as B
+    snapshotB = captureLiveAsB()
+    macroBaseSnapshotB = copyModAmountBase(modAmountBase)
     comparingActive = true
-    applySnapshot(snapshotA)       -- recall unedited baseline A
+
+    applySnapshot(snapshotA)
+    modAmountBase = copyModAmountBase(macroBaseSnapshotA)
+    applyMacroToAll()
+
     print("COMPARE_IT: showing A (unedited baseline)")
   else
     if snapshotB then
-      applySnapshot(snapshotB)     -- recall cached edited state B
+      applySnapshot(snapshotB)
+      modAmountBase = copyModAmountBase(macroBaseSnapshotB)
+      applyMacroToAll()
       print("COMPARE_IT: restored B (edited state)")
     end
     comparingActive = false
   end
+
+  compareApplying = false
 end
 
 -- assigns sysEx MIDI values from received patch to corresponding preset parameter values: {byte #, parameter type, nrpn #}
@@ -731,10 +831,23 @@ function assignParam()
     end
     parameterMap.set(deviceId, parType, parNum, value)
   end
+
+  -- Establish the unscaled macro bases from the newly parsed patch.
+  for i = 1, 16 do
+    modAmountBase[i] =
+      parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i]) or 64
+  end
+
+  -- A newly parsed patch starts at full macro scale.
+  macroKnobValue = MACRO_MAX
+  parameterMap.set(deviceId, PT_VIRTUAL, PARAM_MACRO_KNOB, MACRO_MAX)
+
   -- Re-evaluate all modulation slots after the complete patch has been parsed.
   -- A slot is dimmed only when both source parameters are zero.
   modGroup:updateAll()
   modFxGroup:updateAll()
+  -- Establish new A/B baseline for this patch.
+  captureSnapshotA()
 
   -- Update info bar with patch name
   local patchName = ""
@@ -743,8 +856,6 @@ function assignParam()
     if ch and ch ~= 0 then patchName = patchName .. string.char(ch) end
   end
   if #patchName > 0 then info.setText(string.sub(patchName, 1, 20)) end
-  -- Establish new A/B baseline for this patch.
-  captureSnapshotA()
 end
 
  -- assigns sysEx MIDI values from received settings to corresponding preset parameter values
@@ -879,6 +990,36 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     assignChannel(nil,1)         -- should set device channel
   -- inside parameterMap.onChange(), before the generic NRPN branch:
   end  
+  -- Macro knob moved: rescale all 16 amounts from their bases, don't NRPN the macro itself
+  if pNum == PARAM_MACRO_KNOB then
+    macroKnobValue = math.max(0, math.min(MACRO_MAX, midiValue))
+    applyMacroToAll()
+    return
+  end
+  -- User (or macro) touched a mod-amount control: keep base in sync
+  local amtIdx = PARAM_MOD_AMOUNT_INDEX[pNum]
+
+  if amtIdx and not macroApplying and not compareApplying then
+    local factor = macroFactor()
+
+    if math.abs(factor) > 0.02 then
+      -- Reconstruct the unscaled base from the currently displayed amount.
+      local base = 64 + (midiValue - 64) / factor
+
+      if base < 0 then
+        base = 0
+      elseif base > 127 then
+        base = 127
+      end
+
+      modAmountBase[amtIdx] = base
+    else
+      -- Near the bipolar center, the original base cannot be recovered
+      -- reliably because all values are close to 64.
+      modAmountBase[amtIdx] = midiValue
+    end
+  end
+
   if pNum == PARAM_COMPARE_IT then
     compareIt(valueObjects[1], midiValue)
     return
@@ -888,3 +1029,12 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     sendSimpleNRPN(pNum, midiValue, channel)
   end
 end
+
+-- request Peak wavetable names and global settings on preset load
+function preset.onLoad()
+  loadNameBank()       -- restore cached patch names first
+  getAllWaveNames(nil, 1)
+  getSettings(nil,1) 
+  pages.display(12)
+end
+
