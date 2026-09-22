@@ -856,8 +856,8 @@ function compareIt(valueObject, value)
       applySnapshot(snapshotB)
       modAmountBase = copyModAmountBase(macroBaseSnapshotB)
 
-      -- Restore whatever the macro knob is actually set to.
-      applyMacroToAll(nil,true)
+      -- Restore whatever the macro knob is actually set to. But still respect active locks
+      applyMacroToAll()
 
       print("COMPARE_IT: restored B (live, current macro applied)")
     end
