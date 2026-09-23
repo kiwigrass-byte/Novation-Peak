@@ -8,9 +8,6 @@ local device = devices.get(deviceId)
 local port = device:getPort()
 local channel = device:getChannel()
 
--- set timer interval for requesting each of 512 patch dumps for patch name extraction
-timer.setPeriod(200) -- 200 ms
-
 -- events to track
 events.subscribe(PAGES | POTS)
 
@@ -561,51 +558,61 @@ local patchScanState = {
   isRunning = false   -- scanner active flag
 }
 
--- Start the patch scanner (sends 5 requests per second)
-function startPatchScanner(valueObject,value)
-  if value == 0 then return end
-  if patchScanState.isRunning then
-    print("Patch scanner already running")
-    return
-  end
-  patchScanState.isRunning = true
-  patchScanState.bank = 1
-  patchScanState.patch = 0
-  print("Starting patch scanner: 4 banks × 128 patches")
-  timer.enable()
-end
+local SCAN_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41, 0x00, 0x00, 0x00}
 
--- function to stop the patch scanner
+local SCAN_PERIOD_MS = 200
+
 local function stopPatchScanner()
-  timer.disable()
   patchScanState.isRunning = false
-  flushNameBankIfDirty()   -- final save at end of scan
+  flushNameBankIfDirty()
   print("Patch scanner stopped")
 end
 
-local SCAN_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41, 0x00, 0x00, 0x00}
+local function scanNextPatch()
+  if not patchScanState.isRunning then
+    return
+  end
 
--- Timer callback (called by Electra One runtime)
-function timer.onTick()
-  if not patchScanState.isRunning then return end
-  -- Send the sysex request for current bank/patch
-  local msg = concat(SCAN_HEADER, {patchScanState.bank, patchScanState.patch})
+  local bank = patchScanState.bank
+  local patch = patchScanState.patch
+
+  local msg = concat(SCAN_HEADER, {bank, patch})
   midi.sendSysex(port, msg)
-  print(string.format("Requesting Bank %d, Patch %03d", patchScanState.bank, patchScanState.patch))
-  -- Advance to next patch
-  patchScanState.patch = patchScanState.patch + 1
-  -- Check if we've reached the end of this bank
+
+  print(string.format("Requesting Bank %d, Patch %03d", bank, patch))
+
+  patchScanState.patch = patch + 1
+
   if patchScanState.patch >= 128 then
     patchScanState.patch = 0
     patchScanState.bank = patchScanState.bank + 1
-    -- Check if we've completed all 4 banks
+
     if patchScanState.bank > 4 then
       patchScanState.bank = 1
       print("Patch scanner cycle complete")
       stopPatchScanner()
       parameterMap.set(deviceId, PT_VIRTUAL, 10024, 0)
+      return
     end
   end
+
+  schedule.after(SCAN_PERIOD_MS, scanNextPatch)
+end
+
+function startPatchScanner(valueObject, value)
+  if value == 0 then return end
+
+  if patchScanState.isRunning then
+    print("Patch scanner already running")
+    return
+  end
+
+  patchScanState.isRunning = true
+  patchScanState.bank = 1
+  patchScanState.patch = 0
+
+  print("Starting patch scanner: 4 banks × 128 patches")
+  schedule.after(SCAN_PERIOD_MS, scanNextPatch)
 end
 
 -- ---------------- Mod amount macro bipolar scaling ----------------
