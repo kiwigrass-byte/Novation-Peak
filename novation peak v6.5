@@ -767,10 +767,20 @@ local PATCH_PARAM_MAP = {
 
 -- Build once: a fast lookup of parameter numbers that belong to the mod-amount
 -- macro system, so the generic snapshot machinery can skip them entirely.
+-- Parameters that use non-linear/derived encoding and should not be
+-- captured or restored by the generic COMPARE_IT snapshot machinery.
+-- 16003 = combined master clock byte (sysEx byte 237 + bit from 238),
+-- already handled independently via events.onPotTouchChange() /
+-- sysExPatch writes, and its valid range does not match the raw
+-- computed value in all cases.
+local PATCH_PARAM_SKIP_SNAPSHOT = {
+  [16003] = true,
+}
+
 local PATCH_PARAM_IS_MOD_AMOUNT = {}
 for i = 1, #PATCH_PARAM_MAP do
   local parNum = PATCH_PARAM_MAP[i][3]
-  if PARAM_MOD_AMOUNT_INDEX[parNum] then
+  if PARAM_MOD_AMOUNT_INDEX[parNum] or PATCH_PARAM_SKIP_SNAPSHOT[parNum] then
     PATCH_PARAM_IS_MOD_AMOUNT[i] = true
   end
 end
@@ -918,12 +928,10 @@ local macroLfoState = {
   isRunning = false,
   phase = 0.0,
   periodMs = 4000, -- one complete triangle cycle
-  stepMs = 50,     -- update interval
+  stepMs = 50,     -- timer interval
   minValue = 0,
   maxValue = MACRO_MAX,
 }
-
-local macroLfoHandle = nil
 
 local function triangleMacroValue(phase)
   local triangle
@@ -943,12 +951,7 @@ end
 
 local function stopMacroLfo()
   macroLfoState.isRunning = false
-
-  if macroLfoHandle ~= nil then
-    schedule.cancel(macroLfoHandle)
-    macroLfoHandle = nil
-  end
-
+  timer.disable()
   print("Macro LFO stopped")
 end
 
@@ -972,8 +975,9 @@ local function macroLfoTick()
 
   local value = triangleMacroValue(macroLfoState.phase)
 
-  -- Keep the virtual macro control/UI synchronized.
   macroKnobValue = value
+
+  -- Keep the virtual macro control/UI synchronized.
   parameterMap.set(
     deviceId,
     PT_VIRTUAL,
@@ -981,12 +985,12 @@ local function macroLfoTick()
     value
   )
 
-  -- Scheduled parameterMap.set() does not appear to invoke the
-  -- same macro-processing path as physical knob movement.
+  -- Required because scheduled/timer updates do not necessarily invoke
+  -- the same macro processing path as a physical control movement.
   applyMacroToAll()
 end
 
-local function startMacroLfo()
+function startMacroLfo()
   if macroLfoState.isRunning then
     return
   end
@@ -994,12 +998,16 @@ local function startMacroLfo()
   macroLfoState.isRunning = true
   macroLfoState.phase = 0.0
 
-  print("Starting macro LFO")
+  timer.setPeriod(macroLfoState.stepMs)
+  timer.enable()
 
-  macroLfoHandle = schedule.every(
-    macroLfoState.stepMs,
-    macroLfoTick
-  )
+  print("Starting macro LFO")
+end
+
+function timer.onTick()
+  if macroLfoState.isRunning then
+    macroLfoTick()
+  end
 end
 
 -- assigns sysEx MIDI values from received patch to corresponding preset parameter values: {byte #, parameter type, nrpn #}
