@@ -1,5 +1,5 @@
--- Novation PEAK preset v6.4
--- 09/22/26
+-- Novation PEAK preset v6.5
+-- 09/23/26
 local authorDate = "New Ignis Kiwigrass"
 info.setText(authorDate)
 
@@ -115,7 +115,7 @@ end
 -- Debounced/controlled persistence during large scans
 local nameBankDirty = false
 local nameBankUpdates = 0
-local SAVE_EVERY_N_UPDATES = 32 -- tune to 16/32/64 if desired
+local SAVE_EVERY_N_UPDATES = 128 
 
 local function markNameBankDirty()
   nameBankDirty = true
@@ -550,20 +550,23 @@ function getAllWaveNames(valueObject, value)
     midi.sendSysex(port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x47,0x00,0x00,i,0x00,0x00})
   end
 end
---------------------------- Timer-based patch scanning all patches al all banks ----------------------------------------
--- State tracking for the patch scanner
+
+------------------ Schedule patch scanning ------------------------
 local patchScanState = {
   bank = 1,           -- current bank (1-4)
   patch = 0,          -- current patch (0-127)
   isRunning = false   -- scanner active flag
 }
-
-local SCAN_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41, 0x00, 0x00, 0x00}
-
+local SCAN_HEADER = { 0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41, 0x00, 0x00, 0x00 }
 local SCAN_PERIOD_MS = 200
+local scanHandle = nil
 
 local function stopPatchScanner()
   patchScanState.isRunning = false
+  if scanHandle ~= nil then
+    schedule.cancel(scanHandle)
+    scanHandle = nil
+  end
   flushNameBankIfDirty()
   print("Patch scanner stopped")
 end
@@ -572,47 +575,41 @@ local function scanNextPatch()
   if not patchScanState.isRunning then
     return
   end
-
   local bank = patchScanState.bank
   local patch = patchScanState.patch
-
   local msg = concat(SCAN_HEADER, {bank, patch})
   midi.sendSysex(port, msg)
-
-  print(string.format("Requesting Bank %d, Patch %03d", bank, patch))
-
+  print(string.format(
+    "Requesting Bank %d, Patch %03d",
+    bank,
+    patch
+  ))
   patchScanState.patch = patch + 1
-
   if patchScanState.patch >= 128 then
     patchScanState.patch = 0
     patchScanState.bank = patchScanState.bank + 1
-
     if patchScanState.bank > 4 then
       patchScanState.bank = 1
       print("Patch scanner cycle complete")
       stopPatchScanner()
       parameterMap.set(deviceId, PT_VIRTUAL, 10024, 0)
-      return
     end
   end
-
-  schedule.after(SCAN_PERIOD_MS, scanNextPatch)
 end
 
 function startPatchScanner(valueObject, value)
-  if value == 0 then return end
-
+  if value == 0 then
+    return
+  end
   if patchScanState.isRunning then
     print("Patch scanner already running")
     return
   end
-
   patchScanState.isRunning = true
   patchScanState.bank = 1
   patchScanState.patch = 0
-
   print("Starting patch scanner: 4 banks × 128 patches")
-  schedule.after(SCAN_PERIOD_MS, scanNextPatch)
+  scanHandle = schedule.every( SCAN_PERIOD_MS, scanNextPatch  )
 end
 
 -- ---------------- Mod amount macro bipolar scaling ----------------
@@ -1138,7 +1135,6 @@ end
 function preset.onLoad()
   loadNameBank()       -- restore cached patch names first
   getAllWaveNames(nil, 1)
-  getSettings(nil,1) 
+  getSettings(nil,1)
   pages.display(12)
 end
-
