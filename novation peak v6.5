@@ -911,6 +911,97 @@ function compareIt(valueObject, value)
   compareApplying = false
 end
 
+-- ---------------- Macro amount LFO ----------------
+local PARAM_MACRO_LFO = 10070
+
+local macroLfoState = {
+  isRunning = false,
+  phase = 0.0,
+  periodMs = 4000, -- one complete triangle cycle
+  stepMs = 50,     -- update interval
+  minValue = 0,
+  maxValue = MACRO_MAX,
+}
+
+local macroLfoHandle = nil
+
+local function triangleMacroValue(phase)
+  local triangle
+
+  if phase < 0.5 then
+    triangle = phase * 2
+  else
+    triangle = 2 - phase * 2
+  end
+
+  local value =
+    macroLfoState.minValue
+    + triangle * (macroLfoState.maxValue - macroLfoState.minValue)
+
+  return math.floor(value + 0.5)
+end
+
+local function stopMacroLfo()
+  macroLfoState.isRunning = false
+
+  if macroLfoHandle ~= nil then
+    schedule.cancel(macroLfoHandle)
+    macroLfoHandle = nil
+  end
+
+  print("Macro LFO stopped")
+end
+
+local function macroLfoTick()
+  if not macroLfoState.isRunning then
+    return
+  end
+
+  -- Hold the LFO while COMPARE_IT is showing snapshot A.
+  if comparingActive then
+    return
+  end
+
+  macroLfoState.phase =
+    macroLfoState.phase
+    + macroLfoState.stepMs / macroLfoState.periodMs
+
+  if macroLfoState.phase >= 1 then
+    macroLfoState.phase = macroLfoState.phase - 1
+  end
+
+  local value = triangleMacroValue(macroLfoState.phase)
+
+  -- Keep the virtual macro control/UI synchronized.
+  macroKnobValue = value
+  parameterMap.set(
+    deviceId,
+    PT_VIRTUAL,
+    PARAM_MACRO_KNOB,
+    value
+  )
+
+  -- Scheduled parameterMap.set() does not appear to invoke the
+  -- same macro-processing path as physical knob movement.
+  applyMacroToAll()
+end
+
+local function startMacroLfo()
+  if macroLfoState.isRunning then
+    return
+  end
+
+  macroLfoState.isRunning = true
+  macroLfoState.phase = 0.0
+
+  print("Starting macro LFO")
+
+  macroLfoHandle = schedule.every(
+    macroLfoState.stepMs,
+    macroLfoTick
+  )
+end
+
 -- assigns sysEx MIDI values from received patch to corresponding preset parameter values: {byte #, parameter type, nrpn #}
 function assignParam()   
   if not sysExPatch[2] then return end -- do not process if not parsed
@@ -1032,7 +1123,7 @@ function midi.onSysex(midiInput, sysexBlock)
   end
 end
 
-function midi.onControlChange(midiInput, ch, controllerNumber, value)
+function onControlChange(midiInput, ch, controllerNumber, value)
   if controllerNumber == 32 then
     parameterMap.set(deviceId, PT_VIRTUAL, 10032, value)
   elseif controllerNumber == 99 then
@@ -1051,7 +1142,7 @@ function midi.onControlChange(midiInput, ch, controllerNumber, value)
   end
 end
 
-function midi.onProgramChange(midiInput, channel, programNumber)
+function onProgramChange(midiInput, channel, programNumber)
   parameterMap.set(deviceId, PT_VIRTUAL, 10033, programNumber) -- updates patch number parameter if change patch on the Peak
   getPatch(nil,1)
 end
@@ -1091,6 +1182,15 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     assignChannel(nil,1)         -- should set device channel
   -- inside parameterMap.onChange(), before the generic NRPN branch:
   end  
+  -- Macro LFO enable toggle
+  if pNum == PARAM_MACRO_LFO then
+    if midiValue ~= 0 then
+      startMacroLfo()
+    else
+      stopMacroLfo()
+    end
+    return
+  end
   -- Macro knob moved: rescale all 16 amounts from their bases, don't NRPN the macro itself
   if pNum == PARAM_MACRO_KNOB then
     macroKnobValue = math.max(0, math.min(MACRO_MAX, midiValue))
