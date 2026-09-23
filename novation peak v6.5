@@ -1218,7 +1218,7 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
   -- inside parameterMap.onChange(), before the generic NRPN branch:
   end  
   -- Macro LFO enable toggle
-  if pNum == PARAM_MACRO_LFO then
+  if pType == PT_VIRTUAL and pNum == PARAM_MACRO_LFO then
     if midiValue ~= 0 then
       startMacroLfo()
     else
@@ -1227,43 +1227,51 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     return
   end
   -- Macro knob moved: rescale all 16 amounts from their bases, don't NRPN the macro itself
-  if pNum == PARAM_MACRO_KNOB then
+  if pType == PT_VIRTUAL and pNum == PARAM_MACRO_KNOB then
     macroKnobValue = math.max(0, math.min(MACRO_MAX, midiValue))
     applyMacroToAll()
     return
   end
   -- User (or macro) touched a mod-amount control: keep base in sync
-  local amtIdx = PARAM_MOD_AMOUNT_INDEX[pNum]
+  if pType == PT_VIRTUAL then
+    local amtIdx = PARAM_MOD_AMOUNT_INDEX[pNum]
 
-  if amtIdx and not macroApplying and not compareApplying then
-    local factor = macroFactor()
+    if amtIdx and not macroApplying and not compareApplying then
+      local factor = macroFactor()
 
-    if math.abs(factor) > 0.02 then
-      -- Reconstruct the unscaled base from the currently displayed amount.
-      local base = 64 + (midiValue - 64) / factor
+      if math.abs(factor) > 0.02 then
+        -- Reconstruct the unscaled base from the currently displayed amount.
+        local base = 64 + (midiValue - 64) / factor
 
-      if base < 0 then
-        base = 0
-      elseif base > 127 then
-        base = 127
-      end
+        if base < 0 then
+          base = 0
+        elseif base > 127 then
+          base = 127
+        end
 
-      modAmountBase[amtIdx] = base
-    else
+        modAmountBase[amtIdx] = base
+      else
       -- Near the bipolar center, the original base cannot be recovered
       -- reliably because all values are close to 64.
-      modAmountBase[amtIdx] = midiValue
+        modAmountBase[amtIdx] = midiValue
+      end
     end
   end
-
-  if pNum == PARAM_COMPARE_IT then
+  if pType == PT_VIRTUAL and pNum == PARAM_COMPARE_IT then
     compareIt(valueObjects[1], midiValue)
     return
   end
--- send nrpn messages 
+-- on parameter change send MIDI messages to Peak 
   if msg:getType() == PT_VIRTUAL and pNum < 8000 then
     sendSimpleNRPN(pNum, midiValue, channel)
   end
+  if msg:getType() == PT_CC7 and pNum < 8000 then
+    midi.sendControlChange(port, channel, pNum, midiValue)
+  end
+  if msg:getType() == PT_CC14 and pNum < 8000 then
+    midi.sendControlChange14Bit(port, channel, pNum, midiValue)
+  end
+
 end
 
 -- request Peak wavetable names and global settings on preset load
