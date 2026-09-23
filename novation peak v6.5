@@ -828,17 +828,6 @@ end
 
 local function applySnapshot(snap)
   if not snap then return end
-  for i = 1, #PATCH_PARAM_MAP do
-    if not PATCH_PARAM_IS_MOD_AMOUNT[i] and snap[i] ~= nil then
-      local parType = PATCH_PARAM_MAP[i][2] % 10
-      local parNum  = PATCH_PARAM_MAP[i][3]
-      parameterMap.set(deviceId, parType, parNum, snap[i])
-    end
-  end
-end
-
-local function applySnapshot(snap)
-  if not snap then return end
 
   for i = 1, #PATCH_PARAM_MAP do
     if not PATCH_PARAM_IS_MOD_AMOUNT[i] and snap[i] ~= nil then
@@ -846,13 +835,7 @@ local function applySnapshot(snap)
       local parNum  = PATCH_PARAM_MAP[i][3]
       local value   = snap[i]
 
-      local ok, err = pcall(
-        parameterMap.set,
-        deviceId,
-        parType,
-        parNum,
-        value
-      )
+      local ok, err = pcall( parameterMap.set, deviceId, parType, parNum, value )
 
       if not ok then
         print(string.format(
@@ -1158,7 +1141,7 @@ function midi.onSysex(midiInput, sysexBlock)
   end
 end
 
-function onControlChange(midiInput, ch, controllerNumber, value)
+function midi.onControlChange(midiInput, ch, controllerNumber, value)
   if controllerNumber == 32 then
     parameterMap.set(deviceId, PT_VIRTUAL, 10032, value)
   elseif controllerNumber == 99 then
@@ -1177,7 +1160,7 @@ function onControlChange(midiInput, ch, controllerNumber, value)
   end
 end
 
-function onProgramChange(midiInput, channel, programNumber)
+function midi.onProgramChange(midiInput, channel, programNumber)
   parameterMap.set(deviceId, PT_VIRTUAL, 10033, programNumber) -- updates patch number parameter if change patch on the Peak
   getPatch(nil,1)
 end
@@ -1185,31 +1168,32 @@ end
 function parameterMap.onChange(valueObjects, origin, midiValue)
   if (origin ~= INTERNAL) then return end
   local msg = valueObjects[1]:getMessage()
+  local pType = msg:getType()
   local pNum = msg:getParameterNumber()
   local ctlId = valueObjects[1]:getControl():getId()
   local settingsHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending system settings to Peak 
   -- Patch cue toggle
-  if pNum == 8192 then 
+  if pType == PT_VIRTUAL and pNum == 8192 then 
     sysExSettings[2] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings)) -- sends the updated settings to the Peak
   -- clock source
-  elseif pNum == 8198 then 
+  elseif pType == PT_VIRTUAL and pNum == 8198 then 
     sysExSettings[8] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
   -- ARP > MIDI toggle
-  elseif pNum == 8209 then 
+  elseif pType == PT_VIRTUAL and pNum == 8209 then 
     sysExSettings[19] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
   -- master vol range
-  elseif pNum == 8221 then 
+  elseif pType == PT_VIRTUAL and pNum == 8221 then 
     sysExSettings[31] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
 -- tuning mode for tuning table
-  elseif pNum == 8222 then  
+  elseif pType == PT_VIRTUAL and pNum == 8222 then  
     sysExSettings[32] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings))
 -- midi channel
-  elseif pNum == 8207 then  
+  elseif pType == PT_VIRTUAL and pNum == 8207 then  
     sysExSettings[17] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings))
     midiChannel = midiValue + 1
@@ -1262,13 +1246,13 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     return
   end
 -- on parameter change send MIDI messages to Peak 
-  if msg:getType() == PT_VIRTUAL and pNum < 8000 then
+  if pType == PT_VIRTUAL and pNum < 8000 then
     sendSimpleNRPN(pNum, midiValue, channel)
   end
-  if msg:getType() == PT_CC7 and pNum < 8000 then
+  if pType == PT_CC7 and pNum < 8000 then
     midi.sendControlChange(port, channel, pNum, midiValue)
   end
-  if msg:getType() == PT_CC14 and pNum < 8000 then
+  if pType == PT_CC14 and pNum < 8000 then
     midi.sendControlChange14Bit(port, channel, pNum, midiValue)
   end
 
