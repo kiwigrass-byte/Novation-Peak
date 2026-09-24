@@ -937,7 +937,7 @@ local PARAM_MACRO_LFO = 10070
 local macroLfoState = {
   isRunning = false,
   phase = 0.0,
-  periodMs = 4000, -- one complete triangle cycle
+  periodMs = 4000, -- one complete triangle cycle; overwritten by PARAM_LFO_RATE on change/start
   stepMs = 50,     -- timer interval
   minValue = 0,
   maxValue = MACRO_MAX,
@@ -1018,6 +1018,36 @@ function timer.onTick()
   if macroLfoState.isRunning then
     macroLfoTick()
   end
+end
+
+-- ---------------- Macro LFO rate control ----------------
+local PARAM_LFO_RATE = 10071
+
+local LFO_RATE_MIN_MS = 300    -- fastest: 3.3 Hz
+local LFO_RATE_MAX_MS = 20000  -- slowest: 0.05 Hz
+
+-- value: 0-127 CC7, logarithmic mapping to period (ms)
+local function lfoRateToPeriodMs(value)
+  local t = value / 255
+  local logMin = math.log(LFO_RATE_MIN_MS)
+  local logMax = math.log(LFO_RATE_MAX_MS)
+  -- invert: 0 = slowest (max period), 127 = fastest (min period)
+  local logPeriod = logMax + (logMin - logMax) * t
+  return math.floor(math.exp(logPeriod) + 0.5)
+end
+
+-- display formatter for the rate knob
+function displayLfoRate(valueObject, value)
+  local periodMs = lfoRateToPeriodMs(value)
+  if periodMs >= 1000 then
+    return string.format("%.1f s", periodMs / 1000)
+  else
+    return string.format("%d ms", periodMs)
+  end
+end
+
+function lfoRateChange(valueObject, value)
+  macroLfoState.periodMs = lfoRateToPeriodMs(value)
 end
 
 -- assigns sysEx MIDI values from received patch to corresponding preset parameter values: {byte #, parameter type, nrpn #}
@@ -1166,41 +1196,58 @@ function midi.onProgramChange(midiInput, channel, programNumber)
 end
 
 function parameterMap.onChange(valueObjects, origin, midiValue)
-  if (origin ~= INTERNAL) then return end
+  -- Don't want Lua and incoming MIDI changes to enter this dispatcher.
+  if origin ~= INTERNAL then return end
   local msg = valueObjects[1]:getMessage()
   local pType = msg:getType()
   local pNum = msg:getParameterNumber()
-  local ctlId = valueObjects[1]:getControl():getId()
   local settingsHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending system settings to Peak 
+  
+  -- on a physical parameter change on UI send the corresponding MIDI message to Peak 
+  if pType == PT_VIRTUAL and pNum < 8000 then
+    sendSimpleNRPN(pNum, midiValue)
+  end
+  if pType == PT_CC7 and pNum < 8000 then
+    midi.sendControlChange(port, channel, pNum, midiValue)
+  end
+  if pType == PT_CC14 and pNum < 8000 then
+    midi.sendControlChange14Bit(port, channel, pNum, midiValue)
+  end
   -- Patch cue toggle
   if pType == PT_VIRTUAL and pNum == 8192 then 
     sysExSettings[2] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings)) -- sends the updated settings to the Peak
+  end
   -- clock source
-  elseif pType == PT_VIRTUAL and pNum == 8198 then 
+  if pType == PT_VIRTUAL and pNum == 8198 then 
     sysExSettings[8] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
+  end
   -- ARP > MIDI toggle
-  elseif pType == PT_VIRTUAL and pNum == 8209 then 
+  if pType == PT_VIRTUAL and pNum == 8209 then 
     sysExSettings[19] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
+  end
   -- master vol range
-  elseif pType == PT_VIRTUAL and pNum == 8221 then 
+  if pType == PT_VIRTUAL and pNum == 8221 then 
     sysExSettings[31] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
--- tuning mode for tuning table
-  elseif pType == PT_VIRTUAL and pNum == 8222 then  
+  end
+  -- tuning mode for tuning table
+  if pType == PT_VIRTUAL and pNum == 8222 then  
     sysExSettings[32] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings))
--- midi channel
-  elseif pType == PT_VIRTUAL and pNum == 8207 then  
+  end
+  -- midi channel
+  if pType == PT_VIRTUAL and pNum == 8207 then  
     sysExSettings[17] = parameterMap.get(deviceId, PT_VIRTUAL, pNum)
     midi.sendSysex (port, concat(settingsHeader,sysExSettings))
     midiChannel = midiValue + 1
     print("New MIDI Channel assigned by preset: "..math.floor(midiChannel))
     assignChannel(nil,1)         -- should set device channel
-  -- inside parameterMap.onChange(), before the generic NRPN branch:
   end  
+
+  -- Other INTERNAL only UI actions with purely virtual parameters
   -- Macro LFO enable toggle
   if pType == PT_VIRTUAL and pNum == PARAM_MACRO_LFO then
     if midiValue ~= 0 then
@@ -1245,17 +1292,6 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     compareIt(valueObjects[1], midiValue)
     return
   end
--- on parameter change send MIDI messages to Peak 
-  if pType == PT_VIRTUAL and pNum < 8000 then
-    sendSimpleNRPN(pNum, midiValue, channel)
-  end
-  if pType == PT_CC7 and pNum < 8000 then
-    midi.sendControlChange(port, channel, pNum, midiValue)
-  end
-  if pType == PT_CC14 and pNum < 8000 then
-    midi.sendControlChange14Bit(port, channel, pNum, midiValue)
-  end
-
 end
 
 -- request Peak wavetable names and global settings on preset load
