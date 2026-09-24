@@ -1006,31 +1006,35 @@ local function macroLfoTick()
   applyMacroToAll()
 end
 
-function startMacroLfo(mode)
-  if macroLfoState.isRunning then
-    return
-  end
-
+local function setMacroLfoRange(mode)
   if mode == 1 then
-    -- Unipolar: travel between 100% (full macro) and 0% (center)
+    -- Unipolar: 100% down to 0% (center)
     macroLfoState.minValue = MACRO_CENTER
     macroLfoState.maxValue = MACRO_MAX
   else
-    -- Bipolar (mode 2, or any other non-zero value): travel between
-    -- 100% and -100%
+    -- Bipolar (mode 2): 100% down to -100%
     macroLfoState.minValue = 0
     macroLfoState.maxValue = MACRO_MAX
   end
+  print("Macro LFO range set (mode " .. tostring(mode) .. ")")
+end
+
+function startMacroLfo(mode)
+  setMacroLfoRange(mode)
+
+  if macroLfoState.isRunning then
+    -- Already running: range was just reconfigured above, keep going
+    -- from the current phase instead of restarting.
+    return
+  end
 
   macroLfoState.isRunning = true
-  -- Start at the peak (100%) rather than the bottom of the range.
-  -- triangleMacroValue(0.5) == maxValue, so phase 0.5 is the starting point.
-  macroLfoState.phase = 0.5
+  macroLfoState.phase = 0.5  -- start at peak (100%)
 
   timer.setPeriod(macroLfoState.stepMs)
   timer.enable()
 
-  print("Starting macro LFO (mode " .. tostring(mode) .. ")")
+  print("Starting macro LFO")
 end
 
 function timer.onTick()
