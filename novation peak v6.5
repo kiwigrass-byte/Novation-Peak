@@ -939,15 +939,38 @@ end
 
 -- ---------------- Macro amount LFO ----------------
 local PARAM_MACRO_LFO = 10070
+local PARAM_LFO_RATE = 10071
+local PARAM_MACRO_LFO_WAVE = 10072
+
+-- Macro LFO modes
+local MACRO_LFO_OFF = 0
+local MACRO_LFO_UNIPOLAR = 1
+local MACRO_LFO_BIPOLAR = 2
+
+-- Macro LFO waveforms
+local MACRO_LFO_TRIANGLE = 0
+local MACRO_LFO_SH = 1
 
 local macroLfoState = {
   isRunning = false,
-  phase = 0.0,
-  periodMs = 4000, -- one complete triangle cycle; overwritten by PARAM_LFO_RATE on change/start
+  phase = 0.5,
+
+  periodMs = 4000, -- one complete cycle
   stepMs = 50,     -- timer interval
-  minValue = 0,
+
+  mode = MACRO_LFO_UNIPOLAR,
+  waveform = MACRO_LFO_TRIANGLE,
+
+  -- Normalized S&H value:
+  -- 0.0 = minimum of the active range
+  -- 1.0 = maximum of the active range
+  heldRandom = 1.0,
+
+  minValue = MACRO_CENTER,
   maxValue = MACRO_MAX,
 }
+
+-- ---------------- LFO waveform helpers ----------------
 
 local function triangleMacroValue(phase)
   local triangle
@@ -963,6 +986,71 @@ local function triangleMacroValue(phase)
     + triangle * (macroLfoState.maxValue - macroLfoState.minValue)
 
   return math.floor(value + 0.5)
+end
+
+local function sampleAndHoldMacroValue()
+  local value =
+    macroLfoState.minValue
+    + macroLfoState.heldRandom
+      * (macroLfoState.maxValue - macroLfoState.minValue)
+
+  return math.floor(value + 0.5)
+end
+
+local function currentMacroLfoValue()
+  if macroLfoState.waveform == MACRO_LFO_SH then
+    return sampleAndHoldMacroValue()
+  end
+
+  return triangleMacroValue(macroLfoState.phase)
+end
+
+local function randomizeSampleAndHold()
+  macroLfoState.heldRandom = math.random()
+end
+
+-- ---------------- LFO range/mode handling ----------------
+
+local function setMacroLfoRange(mode)
+  if mode ~= MACRO_LFO_UNIPOLAR
+      and mode ~= MACRO_LFO_BIPOLAR then
+    mode = MACRO_LFO_UNIPOLAR
+  end
+
+  macroLfoState.mode = mode
+  macroLfoState.maxValue = MACRO_MAX
+
+  if mode == MACRO_LFO_UNIPOLAR then
+    -- 100% down to 0%
+    macroLfoState.minValue = MACRO_CENTER
+  else
+    -- 100% down to -100%
+    macroLfoState.minValue = 0
+  end
+
+  print("Macro LFO range set (mode " .. tostring(mode) .. ")")
+end
+
+local function applyCurrentMacroLfoValue()
+  if comparingActive then
+    return
+  end
+
+  local value = currentMacroLfoValue()
+
+  macroKnobValue = value
+
+  -- Keep the virtual macro control/UI synchronized.
+  parameterMap.set(
+    deviceId,
+    PT_VIRTUAL,
+    PARAM_MACRO_KNOB,
+    value
+  )
+
+  -- Scheduled/timer updates do not necessarily invoke the normal
+  -- macro-control processing path.
+  applyMacroToAll()
 end
 
 local function stopMacroLfo()
@@ -985,54 +1073,44 @@ local function macroLfoTick()
     macroLfoState.phase
     + macroLfoState.stepMs / macroLfoState.periodMs
 
+  local wrapped = false
+
   if macroLfoState.phase >= 1 then
     macroLfoState.phase = macroLfoState.phase - 1
+    wrapped = true
   end
 
-  local value = triangleMacroValue(macroLfoState.phase)
-
-  macroKnobValue = value
-
-  -- Keep the virtual macro control/UI synchronized.
-  parameterMap.set(
-    deviceId,
-    PT_VIRTUAL,
-    PARAM_MACRO_KNOB,
-    value
-  )
-
-  -- Required because scheduled/timer updates do not necessarily invoke
-  -- the same macro processing path as a physical control movement.
-  applyMacroToAll()
-end
-
-local function setMacroLfoRange(mode)
-  if mode == 1 then
-    -- Unipolar: 100% down to 0% (center)
-    macroLfoState.minValue = MACRO_CENTER
-    macroLfoState.maxValue = MACRO_MAX
-  else
-    -- Bipolar (mode 2): 100% down to -100%
-    macroLfoState.minValue = 0
-    macroLfoState.maxValue = MACRO_MAX
+  -- Select one new random value at the start of each S&H cycle.
+  if wrapped and macroLfoState.waveform == MACRO_LFO_SH then
+    randomizeSampleAndHold()
   end
-  print("Macro LFO range set (mode " .. tostring(mode) .. ")")
+
+  applyCurrentMacroLfoValue()
 end
 
 function startMacroLfo(mode)
   setMacroLfoRange(mode)
 
   if macroLfoState.isRunning then
-    -- Already running: range was just reconfigured above, keep going
-    -- from the current phase instead of restarting.
+    -- Mode changes reconfigure the range while preserving:
+    --   - the current phase for triangle
+    --   - the current held random value for S&H
+    applyCurrentMacroLfoValue()
     return
   end
 
   macroLfoState.isRunning = true
-  macroLfoState.phase = 0.5  -- start at peak (100%)
+
+  -- Start at 100%.
+  macroLfoState.phase = 0.5
+  macroLfoState.heldRandom = 1.0
 
   timer.setPeriod(macroLfoState.stepMs)
   timer.enable()
+
+  -- Apply the starting value immediately rather than waiting for the
+  -- first timer tick.
+  applyCurrentMacroLfoValue()
 
   print("Starting macro LFO")
 end
@@ -1044,24 +1122,25 @@ function timer.onTick()
 end
 
 -- ---------------- Macro LFO rate control ----------------
-local PARAM_LFO_RATE = 10071
 
-local LFO_RATE_MIN_MS = 300    -- fastest: 3.3 Hz
-local LFO_RATE_MAX_MS = 20000  -- slowest: 0.05 Hz
+local LFO_RATE_MIN_MS = 300
+local LFO_RATE_MAX_MS = 20000
 
--- value: 0-255, logarithmic mapping to period (ms)
+-- value: 0-255, logarithmic mapping to period in milliseconds
 local function lfoRateToPeriodMs(value)
   local t = value / 255
   local logMin = math.log(LFO_RATE_MIN_MS)
   local logMax = math.log(LFO_RATE_MAX_MS)
-  -- invert: 0 = slowest (max period), 255 = fastest (min period)
+
+  -- 0 = slowest, 255 = fastest
   local logPeriod = logMax + (logMin - logMax) * t
+
   return math.floor(math.exp(logPeriod) + 0.5)
 end
 
--- display formatter for the rate knob
 function displayLfoRate(valueObject, value)
   local periodMs = lfoRateToPeriodMs(value)
+
   if periodMs >= 1000 then
     return string.format("%.1f s", periodMs / 1000)
   else
@@ -1071,6 +1150,40 @@ end
 
 function lfoRateChange(valueObject, value)
   macroLfoState.periodMs = lfoRateToPeriodMs(value)
+
+  print(string.format(
+    "Macro LFO period set to %d ms",
+    macroLfoState.periodMs
+  ))
+end
+
+-- ---------------- Macro LFO waveform control ----------------
+
+function displayMacroLfoWave(valueObject, value)
+  if value == MACRO_LFO_SH then
+    return "S&H"
+  end
+
+  return "Triangle"
+end
+
+function macroLfoWaveChange(valueObject, value)
+  if value ~= MACRO_LFO_TRIANGLE
+      and value ~= MACRO_LFO_SH then
+    value = MACRO_LFO_TRIANGLE
+  end
+
+  macroLfoState.waveform = value
+
+  if value == MACRO_LFO_SH then
+    -- Selecting S&H creates a new held value immediately.
+    -- This avoids waiting until the next phase wrap.
+    randomizeSampleAndHold()
+  end
+
+  applyCurrentMacroLfoValue()
+
+  print("Macro LFO waveform: " .. displayMacroLfoWave(nil, value))
 end
 
 -- assigns sysEx MIDI values from received patch to corresponding preset parameter values: {byte #, parameter type, nrpn #}
@@ -1274,14 +1387,19 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
   
   -- Macro LFO enable toggle (0 = off, 1 = unipolar, 2 = bipolar)
   if pType == PT_VIRTUAL and pNum == PARAM_MACRO_LFO then
-    if midiValue ~= 0 then
-      startMacroLfo(midiValue)
-    else
+    if midiValue == MACRO_LFO_OFF then
       stopMacroLfo()
+    else
+      startMacroLfo(midiValue)
     end
+
     return
   end
-
+  -- Macro LFO waveform: (0 = triangle, 1 = sample and hold
+  if pType == PT_VIRTUAL and pNum == PARAM_MACRO_LFO_WAVE then
+    macroLfoWaveChange(valueObjects[1], midiValue)
+    return
+  end
   -- Macro knob moved: rescale all 16 amounts from their bases, don't NRPN the macro itself
   if pType == PT_VIRTUAL and pNum == PARAM_MACRO_KNOB then
     macroKnobValue = math.max(0, math.min(MACRO_MAX, midiValue))
