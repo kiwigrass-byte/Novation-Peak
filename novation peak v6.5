@@ -1006,18 +1006,31 @@ local function macroLfoTick()
   applyMacroToAll()
 end
 
-function startMacroLfo()
+function startMacroLfo(mode)
   if macroLfoState.isRunning then
     return
   end
 
+  if mode == 1 then
+    -- Unipolar: travel between 100% (full macro) and 0% (center)
+    macroLfoState.minValue = MACRO_CENTER
+    macroLfoState.maxValue = MACRO_MAX
+  else
+    -- Bipolar (mode 2, or any other non-zero value): travel between
+    -- 100% and -100%
+    macroLfoState.minValue = 0
+    macroLfoState.maxValue = MACRO_MAX
+  end
+
   macroLfoState.isRunning = true
-  macroLfoState.phase = 0.0
+  -- Start at the peak (100%) rather than the bottom of the range.
+  -- triangleMacroValue(0.5) == maxValue, so phase 0.5 is the starting point.
+  macroLfoState.phase = 0.5
 
   timer.setPeriod(macroLfoState.stepMs)
   timer.enable()
 
-  print("Starting macro LFO")
+  print("Starting macro LFO (mode " .. tostring(mode) .. ")")
 end
 
 function timer.onTick()
@@ -1032,12 +1045,12 @@ local PARAM_LFO_RATE = 10071
 local LFO_RATE_MIN_MS = 300    -- fastest: 3.3 Hz
 local LFO_RATE_MAX_MS = 20000  -- slowest: 0.05 Hz
 
--- value: 0-127 CC7, logarithmic mapping to period (ms)
+-- value: 0-255, logarithmic mapping to period (ms)
 local function lfoRateToPeriodMs(value)
   local t = value / 255
   local logMin = math.log(LFO_RATE_MIN_MS)
   local logMax = math.log(LFO_RATE_MAX_MS)
-  -- invert: 0 = slowest (max period), 127 = fastest (min period)
+  -- invert: 0 = slowest (max period), 255 = fastest (min period)
   local logPeriod = logMax + (logMin - logMax) * t
   return math.floor(math.exp(logPeriod) + 0.5)
 end
@@ -1254,21 +1267,24 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
   end  
 
   -- Other INTERNAL only UI actions with purely virtual parameters
-  -- Macro LFO enable toggle
+  
+  -- Macro LFO enable toggle (0 = off, 1 = unipolar, 2 = bipolar)
   if pType == PT_VIRTUAL and pNum == PARAM_MACRO_LFO then
     if midiValue ~= 0 then
-      startMacroLfo()
+      startMacroLfo(midiValue)
     else
       stopMacroLfo()
     end
     return
   end
+
   -- Macro knob moved: rescale all 16 amounts from their bases, don't NRPN the macro itself
   if pType == PT_VIRTUAL and pNum == PARAM_MACRO_KNOB then
     macroKnobValue = math.max(0, math.min(MACRO_MAX, midiValue))
     applyMacroToAll()
     return
   end
+  
   -- User (or macro) touched a mod-amount control: keep base in sync
   if pType == PT_VIRTUAL then
     local amtIdx = PARAM_MOD_AMOUNT_INDEX[pNum]
