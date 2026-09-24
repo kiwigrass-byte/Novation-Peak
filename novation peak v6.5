@@ -951,6 +951,15 @@ local MACRO_LFO_BIPOLAR = 2
 local MACRO_LFO_TRIANGLE = 0
 local MACRO_LFO_SH = 1
 
+-- S&H behavior
+-- Maximum movement toward a new random target per cycle,
+-- expressed as a fraction of the active macro range.
+local MACRO_LFO_SH_MAX_STEP = 0.35
+
+-- Portion of each S&H cycle used to glide toward the
+-- new target. The remainder of the cycle holds the target.
+local MACRO_LFO_SH_GLIDE_FRACTION = 0.15
+
 local macroLfoState = {
   isRunning = false,
   phase = 0.5,
@@ -961,17 +970,35 @@ local macroLfoState = {
   mode = MACRO_LFO_UNIPOLAR,
   waveform = MACRO_LFO_TRIANGLE,
 
-  -- Normalized S&H value:
-  -- 0.0 = minimum of the active range
-  -- 1.0 = maximum of the active range
+  -- Current normalized S&H value.
+  -- 0.0 = minimum of active range
+  -- 1.0 = maximum of active range
   heldRandom = 1.0,
+
+  -- S&H interpolation values.
+  shFromValue = 1.0,
+  shToValue = 1.0,
 
   minValue = MACRO_CENTER,
   maxValue = MACRO_MAX,
 }
 
--- ---------------- LFO waveform helpers ----------------
+-- ---------------- LFO utility functions ----------------
 
+local function clamp01(value)
+  if value < 0 then
+    return 0
+  elseif value > 1 then
+    return 1
+  end
+
+  return value
+end
+
+-- Triangle waveform:
+-- phase 0.0   = minimum
+-- phase 0.5   = maximum
+-- phase 1.0   = minimum again
 local function triangleMacroValue(phase)
   local triangle
 
@@ -988,6 +1015,7 @@ local function triangleMacroValue(phase)
   return math.floor(value + 0.5)
 end
 
+-- Return the current S&H value mapped into the active macro range.
 local function sampleAndHoldMacroValue()
   local value =
     macroLfoState.minValue
@@ -1005,31 +1033,49 @@ local function currentMacroLfoValue()
   return triangleMacroValue(macroLfoState.phase)
 end
 
-local function randomizeSampleAndHold()
-  macroLfoState.heldRandom = math.random()
+-- ---------------- Correlated S&H with slew ----------------
+
+-- Select a nearby random target.
+--
+-- math.random() + math.random() - 1 creates a triangular
+-- distribution centered around zero. Small movements are
+-- more likely than large movements.
+local function chooseNextSampleAndHoldTarget()
+  macroLfoState.shFromValue = macroLfoState.heldRandom
+
+  local signedRandom = math.random() + math.random() - 1
+
+  local newTarget =
+    macroLfoState.shFromValue
+    + signedRandom * MACRO_LFO_SH_MAX_STEP
+
+  macroLfoState.shToValue = clamp01(newTarget)
 end
 
--- ---------------- LFO range/mode handling ----------------
+local function updateSampleAndHoldGlide()
+  local glideFraction = MACRO_LFO_SH_GLIDE_FRACTION
 
-local function setMacroLfoRange(mode)
-  if mode ~= MACRO_LFO_UNIPOLAR
-      and mode ~= MACRO_LFO_BIPOLAR then
-    mode = MACRO_LFO_UNIPOLAR
+  if glideFraction <= 0 then
+    macroLfoState.heldRandom = macroLfoState.shToValue
+    return
   end
 
-  macroLfoState.mode = mode
-  macroLfoState.maxValue = MACRO_MAX
-
-  if mode == MACRO_LFO_UNIPOLAR then
-    -- 100% down to 0%
-    macroLfoState.minValue = MACRO_CENTER
-  else
-    -- 100% down to -100%
-    macroLfoState.minValue = 0
+  -- Once the glide portion is complete, hold the target.
+  if macroLfoState.phase >= glideFraction then
+    macroLfoState.heldRandom = macroLfoState.shToValue
+    return
   end
 
-  print("Macro LFO range set (mode " .. tostring(mode) .. ")")
+  -- Interpolate from the previous value to the new target.
+  local glidePosition = macroLfoState.phase / glideFraction
+
+  macroLfoState.heldRandom =
+    macroLfoState.shFromValue
+    + (macroLfoState.shToValue - macroLfoState.shFromValue)
+      * glidePosition
 end
+
+-- ---------------- Apply current LFO value ----------------
 
 local function applyCurrentMacroLfoValue()
   if comparingActive then
@@ -1048,10 +1094,12 @@ local function applyCurrentMacroLfoValue()
     value
   )
 
-  -- Scheduled/timer updates do not necessarily invoke the normal
+  -- Timer updates do not necessarily invoke the normal
   -- macro-control processing path.
   applyMacroToAll()
 end
+
+-- ---------------- Start/stop/tick ----------------
 
 local function stopMacroLfo()
   macroLfoState.isRunning = false
@@ -1080,21 +1128,44 @@ local function macroLfoTick()
     wrapped = true
   end
 
-  -- Select one new random value at the start of each S&H cycle.
-  if wrapped and macroLfoState.waveform == MACRO_LFO_SH then
-    randomizeSampleAndHold()
+  if macroLfoState.waveform == MACRO_LFO_SH then
+    -- At the start of each cycle, choose a nearby new target.
+    if wrapped then
+      chooseNextSampleAndHoldTarget()
+    end
+
+    -- Glide toward the target, then hold it.
+    updateSampleAndHoldGlide()
   end
 
   applyCurrentMacroLfoValue()
+end
+
+local function setMacroLfoRange(mode)
+  if mode ~= MACRO_LFO_UNIPOLAR
+      and mode ~= MACRO_LFO_BIPOLAR then
+    mode = MACRO_LFO_UNIPOLAR
+  end
+
+  macroLfoState.mode = mode
+  macroLfoState.maxValue = MACRO_MAX
+
+  if mode == MACRO_LFO_UNIPOLAR then
+    -- 100% down to 0%
+    macroLfoState.minValue = MACRO_CENTER
+  else
+    -- 100% down to -100%
+    macroLfoState.minValue = 0
+  end
+
+  print("Macro LFO range set (mode " .. tostring(mode) .. ")")
 end
 
 function startMacroLfo(mode)
   setMacroLfoRange(mode)
 
   if macroLfoState.isRunning then
-    -- Mode changes reconfigure the range while preserving:
-    --   - the current phase for triangle
-    --   - the current held random value for S&H
+    -- Mode changed while running. Keep the timer and phase.
     applyCurrentMacroLfoValue()
     return
   end
@@ -1103,13 +1174,16 @@ function startMacroLfo(mode)
 
   -- Start at 100%.
   macroLfoState.phase = 0.5
+
+  -- Start S&H at 100% as well.
   macroLfoState.heldRandom = 1.0
+  macroLfoState.shFromValue = 1.0
+  macroLfoState.shToValue = 1.0
 
   timer.setPeriod(macroLfoState.stepMs)
   timer.enable()
 
-  -- Apply the starting value immediately rather than waiting for the
-  -- first timer tick.
+  -- Apply the initial 100% value immediately.
   applyCurrentMacroLfoValue()
 
   print("Starting macro LFO")
@@ -1173,17 +1247,39 @@ function macroLfoWaveChange(valueObject, value)
     value = MACRO_LFO_TRIANGLE
   end
 
-  macroLfoState.waveform = value
+  -- If changing from triangle to S&H while running,
+  -- begin from the triangle's current position to avoid
+  -- an unrelated jump.
+  if value == MACRO_LFO_SH
+      and macroLfoState.waveform ~= MACRO_LFO_SH then
 
-  if value == MACRO_LFO_SH then
-    -- Selecting S&H creates a new held value immediately.
-    -- This avoids waiting until the next phase wrap.
-    randomizeSampleAndHold()
+    local currentValue = triangleMacroValue(macroLfoState.phase)
+    local range = macroLfoState.maxValue - macroLfoState.minValue
+    local normalized = 1.0
+
+    if range > 0 then
+      normalized =
+        (currentValue - macroLfoState.minValue) / range
+    end
+
+    normalized = clamp01(normalized)
+
+    macroLfoState.heldRandom = normalized
+    macroLfoState.shFromValue = normalized
+    macroLfoState.shToValue = normalized
   end
 
+  macroLfoState.waveform = value
+
+  -- When switching to triangle, the normal triangle calculation
+  -- immediately takes over. When switching to S&H, the current
+  -- value is held until the next cycle boundary.
   applyCurrentMacroLfoValue()
 
-  print("Macro LFO waveform: " .. displayMacroLfoWave(nil, value))
+  print(
+    "Macro LFO waveform: "
+    .. displayMacroLfoWave(nil, value)
+  )
 end
 
 -- assigns sysEx MIDI values from received patch to corresponding preset parameter values: {byte #, parameter type, nrpn #}
