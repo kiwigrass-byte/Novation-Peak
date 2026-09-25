@@ -824,11 +824,8 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
     end
   end
 
-  -- A normal macro operation changes the stored Parameter Map values.
-  -- Any previous LFO baseline is now stale.
-  if not macroLfoState.isRunning then
-    clearLfoMapBaseline()
-  end
+ -- Baseline lifecycle is managed explicitly by LFO start/resume/stop
+ -- and compare transitions. Do not auto-clear it here.
 
   macroApplying = false
 end
@@ -837,6 +834,7 @@ end
 local macroBaseSnapshotA = nil
 local macroBaseSnapshotB = nil
 local compareApplying = false
+local lfoWasRunningBeforeCompare = false
 
 local function copyModAmountBase(src)
   local t = {}
@@ -1010,6 +1008,18 @@ local function stopMacroLfo()
   timer.disable()
 
   print("Macro LFO stopped")
+end
+
+local function resumeMacroLfo()
+  if macroLfoState.isRunning then
+    return
+  end
+
+  macroLfoState.isRunning = true
+  timer.setPeriod(macroLfoState.stepMs)
+  timer.enable()
+  applyCurrentMacroLfoValue()
+  print("Macro LFO resumed")
 end
 
 local function macroLfoTick()
@@ -1346,8 +1356,8 @@ function compareIt(valueObject, value)
   compareApplying = true
 
   if value == 1 then
-    -- COMPARE_IT must show the true parsed patch without the LFO
-    -- simultaneously modulating the Peak.
+    -- Remember whether LFO was running so we can resume on compare OFF.
+    lfoWasRunningBeforeCompare = macroLfoState.isRunning
     if macroLfoState.isRunning then
       stopMacroLfo()
     end
@@ -1399,8 +1409,14 @@ function compareIt(valueObject, value)
     end
 
     comparingActive = false
-  end
 
+    -- Resume LFO only if compare ON paused it.
+    if lfoWasRunningBeforeCompare then
+      captureLfoMapBaseline()
+      resumeMacroLfo()
+      lfoWasRunningBeforeCompare = false
+    end
+  end
   compareApplying = false
 end
 
