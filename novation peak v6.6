@@ -1,5 +1,5 @@
--- Novation PEAK preset v6.5
--- 09/24/26
+-- Novation PEAK preset v6.6
+-- 09/25/26
 local authorDate = "New Ignis Kiwigrass"
 info.setText(authorDate)
 
@@ -646,11 +646,85 @@ for i, p in ipairs(PARAM_MOD_AMOUNT) do PARAM_MOD_AMOUNT_INDEX[p] = i end
 local modAmountBase = {}
 for i = 1, 16 do modAmountBase[i] = 64 end
 
+-- ---------------------------------------------------------------------------
+-- Macro-LFO modulation cache
+--
+-- parameterMap.modulate() changes the value sent to the Peak temporarily.
+-- It does not change the stored Parameter Map value.
+--
+-- lfoMapBaseline[i] is therefore the stored value around which the LFO
+-- modulation is applied. It is captured when the LFO starts and refreshed
+-- whenever the normal macro state is deliberately rewritten.
+-- ---------------------------------------------------------------------------
+local lfoMapBaseline = {}
+local lfoBaselineValid = false
+
+for i = 1, 16 do
+  lfoMapBaseline[i] = 64
+end
+
+local function captureLfoMapBaseline()
+  for i = 1, 16 do
+    lfoMapBaseline[i] =
+      parameterMap.get(
+        deviceId,
+        PT_VIRTUAL,
+        PARAM_MOD_AMOUNT[i]
+      ) or 64
+  end
+
+  lfoBaselineValid = true
+end
+
+local function clearLfoMapBaseline()
+  lfoBaselineValid = false
+
+  for i = 1, 16 do
+    lfoMapBaseline[i] = 64
+  end
+end
+
 local function scaledAmount(base, factor)
   local v = 64 + (base - 64) * factor
   v = math.floor(v + 0.5)
   if v < 0 then v = 0 elseif v > 127 then v = 127 end
   return v
+end
+
+local function modulateAmountFromBaseline(index, targetValue)
+  if not lfoBaselineValid then
+    return
+  end
+
+  local baseline = lfoMapBaseline[index]
+  local delta = targetValue - baseline
+
+  -- No modulation is needed when the desired value is already the stored
+  -- Parameter Map value.
+  if delta == 0 then
+    parameterMap.modulate(
+      deviceId,
+      PT_VIRTUAL,
+      PARAM_MOD_AMOUNT[index],
+      0,
+      0
+    )
+    return
+  end
+
+  -- For these Peak modulation amount parameters, the first MIDI message is
+  -- a 7-bit unsigned value. Use the raw MIDI-value distance as the depth and
+  -- the sign of the distance as the modulation direction.
+  local modulationValue = delta < 0 and -1.0 or 1.0
+  local depth = math.abs(delta)
+
+  parameterMap.modulate(
+    deviceId,
+    PT_VIRTUAL,
+    PARAM_MOD_AMOUNT[index],
+    modulationValue,
+    depth
+  )
 end
 
 -- percentage display for the macro control
@@ -723,6 +797,12 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
         end
       end
     end
+  end
+
+  -- A normal macro operation changes the stored Parameter Map values.
+  -- Any previous LFO baseline is now stale.
+  if not macroLfoState.isRunning then
+    clearLfoMapBaseline()
   end
 
   macroApplying = false
@@ -888,6 +968,12 @@ function compareIt(valueObject, value)
   compareApplying = true
 
   if value == 1 then
+    -- COMPARE_IT must show the true parsed patch without the LFO
+    -- simultaneously modulating the Peak.
+    if macroLfoState.isRunning then
+      stopMacroLfo()
+    end
+
     snapshotB = captureLiveAsB()
     snapshotBModAmounts = captureLiveModAmounts()
     macroBaseSnapshotB = copyModAmountBase(modAmountBase)
@@ -924,6 +1010,9 @@ function compareIt(valueObject, value)
           end
         end
       end
+      -- The stored Parameter Map has now been restored to B.
+      -- Discard any baseline captured for the old state.
+      clearLfoMapBaseline()
 
       -- Apply the current macro to unlocked slots only.
       applyMacroToAll()
@@ -1103,7 +1192,26 @@ end
 
 local function stopMacroLfo()
   macroLfoState.isRunning = false
+
+  -- Remove all temporary modulation and return each parameter to its stored
+  -- Parameter Map value. No Parameter Map writes are performed here.
+  if lfoBaselineValid then
+    for i = 1, 16 do
+      if modAmountBase[i] ~= 64 then
+        parameterMap.modulate(
+          deviceId,
+          PT_VIRTUAL,
+          PARAM_MOD_AMOUNT[i],
+          0,
+          0
+        )
+      end
+    end
+  end
+
+  clearLfoMapBaseline()
   timer.disable()
+
   print("Macro LFO stopped")
 end
 
@@ -1165,17 +1273,28 @@ function startMacroLfo(mode)
   setMacroLfoRange(mode)
 
   if macroLfoState.isRunning then
-    -- Mode changed while running. Keep the timer and phase.
+    -- Mode changed while running. Keep the current phase and baseline.
     applyCurrentMacroLfoValue()
     return
   end
 
+  -- The patch scanner and LFO share the timer. Do not start the LFO while
+  -- a patch scan is active.
+  if patchScanState.isRunning then
+    print("Cannot start macro LFO while patch scanner is running")
+    return
+  end
+
+  -- Capture the currently stored, non-modulated values before the first
+  -- temporary LFO modulation is sent.
+  captureLfoMapBaseline()
+
   macroLfoState.isRunning = true
 
-  -- Start at 100%.
+  -- Start at the maximum macro value.
   macroLfoState.phase = 0.5
 
-  -- Start S&H at 100% as well.
+  -- Start S&H at maximum as well.
   macroLfoState.heldRandom = 1.0
   macroLfoState.shFromValue = 1.0
   macroLfoState.shToValue = 1.0
@@ -1183,13 +1302,17 @@ function startMacroLfo(mode)
   timer.setPeriod(macroLfoState.stepMs)
   timer.enable()
 
-  -- Apply the initial 100% value immediately.
+  -- Apply the initial LFO value immediately.
   applyCurrentMacroLfoValue()
 
   print("Starting macro LFO")
 end
 
 function timer.onTick()
+  if patchScanState.isRunning then
+    return
+  end
+
   if macroLfoState.isRunning then
     macroLfoTick()
   end
@@ -1301,7 +1424,7 @@ function assignParam()
         + getBits(sysExPatch[sysExByte + 1], 2, 1)
       )
     end
-    parameterMap.set(deviceId, parType, parNum, value)
+    parameterMap.updateValue(deviceId, parType, parNum, value)
   end
 
   -- Establish the unscaled macro bases from the newly parsed patch.
@@ -1312,7 +1435,11 @@ function assignParam()
 
   -- A newly parsed patch starts at full macro scale.
   macroKnobValue = MACRO_MAX
-  parameterMap.set(deviceId, PT_VIRTUAL, PARAM_MACRO_KNOB, MACRO_MAX)
+  parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_MACRO_KNOB, MACRO_MAX)
+
+  -- The patch parser changed the stored modulation amount values.
+  -- Any previous temporary LFO baseline is invalid.
+  clearLfoMapBaseline()
 
   -- Re-evaluate all modulation slots after the complete patch has been parsed.
   -- A slot is dimmed only when both source parameters are zero.
@@ -1335,7 +1462,7 @@ function assignSettings()
   if not sysExSettings[2] then return end
   local param = {{2,8192},{8,8198},{14,8204},{15,8205},{16,8206},{17,8207},{19,8209},{31,8221},{32,8222}}
   for i = 1, #param do
-    parameterMap.set (deviceId, PT_VIRTUAL, param[i][2], sysExSettings[param[i][1]])
+    parameterMap.updateValue(deviceId, PT_VIRTUAL, param[i][2], sysExSettings[param[i][1]])
   end
 end
 
