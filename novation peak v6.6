@@ -1421,7 +1421,7 @@ function compareIt(valueObject, value)
   compareApplying = false
 end
 
--- assigns sysEx MIDI values from received patch to corresponding preset parameter values: {byte #, parameter type, nrpn #}
+-- assigns sysEx MIDI values from received patch to corresponding preset parameter values via PATCH_PARAM_MAP: {byte #, parameter type, parameter #}
 function assignParam()   
   if not sysExPatch[2] then return end -- do not process if not parsed
   for i = 1, #PATCH_PARAM_MAP do
