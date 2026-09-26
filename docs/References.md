@@ -69,7 +69,7 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - For timer-driven or rapidly repeating value changes (e.g., an LFO), use `parameterMap.modulate` instead of `parameterMap.set`/`updateValue`.
 - This avoids repeated map writes, callback dispatch, and formatter re-evaluation on every tick, while still transmitting the live value to the synth.
 - Keep a separate baseline cache for the "real" stored value, since `modulate` does not update the Parameter Map.
-
+   
 ### 7) Scheduled background work: prefer `schedule` over a shared timer
 - The patch scanner was migrated from the shared `timer.onTick` callback to
   `schedule.every(SCAN_PERIOD_MS, scanNextPatch)`.
@@ -97,6 +97,26 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - Keep a timeout fallback (`schedule.after(...)`) so startup can still continue if one or more replies are missing.
 - Guard the settings request with a one-shot flag to prevent duplicate sends when “all replies received” and timeout occur close together.
 - In this preset, this reduces unnecessary startup latency versus a fixed 1 s delay while preserving robustness on slower or lossy MIDI paths.
+- Replaced fixed startup delay (`schedule.after(..., getSettings, ...)`) with an event-driven handshake.
+- On `preset.onReady()`, request user wavetable names (slots 64–73) first.
+- Track incoming wavetable-name replies in `midi.onSysex` (`cmd == 0x07`), then request settings immediately after all expected replies arrive.
+- Keep a timeout fallback (`schedule.after`) so settings are still requested if one or more wavetable replies are missing.
+- Use a one-shot guard so settings request is sent only once even if completion and timeout race.
+- Reduced startup log noise by printing a single completion message once all 10 wavetable names are received.
+
+ ### 9) Unset MIDI value
+- MIDI_VALUE_DO_NOT_SEND: The value a message holds when it has nothing to send - a pad that sends something when it is pressed and nothing when it is let go writes this in its off value.
+- It is 16537, which is not a MIDI value of any width, so it can never be mistaken for one.
+- It is accepted by the setters that build a message and refused by everything that sends: parameterMap.set() and the midi.send* functions take 0 to 16383.
+- <message>:isValueSet() and <value>:isSet() ask the same question without the number.
+- The earlier versions of the preset had several params in assignParams() that were for the Summit and so there was no Peak parameter. This generated 16537 messages.  It was useful way to identify unused parameters that could be removed.  
+
+### 10) macro-LFO
+- In macro S&H target selection, hard clamping candidate values to `0..1` caused edge stickiness near 0%/100% because outward moves collapsed to the boundary.
+- Replaced clamp-based edge handling with reflected boundaries so overshoot is mirrored back into range, preserving motion while keeping normalized targets.
+- Result: less boundary dwell, smoother perceived movement near the macro range limits.
+- Triangle mode changes continuously on every LFO tick, while S&H holds each sampled target for most of its cycle.
+- As a result, S&H may require a faster rate to feel continuously active; slower rates intentionally produce longer held movements.
 
 ### Applied in this preset
 - Patch scanning uses `schedule.every()` with a 200 ms interval.
