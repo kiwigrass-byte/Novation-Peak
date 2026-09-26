@@ -1752,12 +1752,13 @@ function events.onPotTouchChange(potId, controlId, touched)
   end
 end
 
--- request Peak wavetable names and global settings on preset load
+-- restore cached patch names and change to performance page when preset loads
 function preset.onLoad()
-  loadNameBank()       -- restore cached patch names first
+  loadNameBank()       
   pages.display(12)
 end
 
+-- request Peak wavetable names and global settings after preset is loaded
 function preset.onReady()
   cancelStartupWaveTimeout()
   startupSettingsRequested = false
