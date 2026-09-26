@@ -1708,6 +1708,6 @@ function preset.onLoad()
 end
 
 function preset.onReady()
-  schedule.after(500,getAllWaveNames,nil,1)
+  getAllWaveNames(nil,1)
   schedule.after(1000,getSettings,nil,1)
 end
