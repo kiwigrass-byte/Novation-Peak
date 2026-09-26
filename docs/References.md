@@ -98,6 +98,14 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - Guard the settings request with a one-shot flag to prevent duplicate sends when “all replies received” and timeout occur close together.
 - In this preset, this reduces unnecessary startup latency versus a fixed 1 s delay while preserving robustness on slower or lossy MIDI paths.
 
+### Startup sequencing refinement (v6.7)
+- Replaced fixed startup delay (`schedule.after(..., getSettings, ...)`) with an event-driven handshake.
+- On `preset.onReady()`, request user wavetable names (slots 64–73) first.
+- Track incoming wavetable-name replies in `midi.onSysex` (`cmd == 0x07`), then request settings immediately after all expected replies arrive.
+- Keep a timeout fallback (`schedule.after`) so settings are still requested if one or more wavetable replies are missing.
+- Use a one-shot guard so settings request is sent only once even if completion and timeout race.
+- Reduced startup log noise by printing a single completion message once all 10 wavetable names are received.
+- 
 ### Applied in this preset
 - Patch scanning uses `schedule.every()` with a 200 ms interval.
 - `scanHandle` is retained so the repeating task can be cancelled.
