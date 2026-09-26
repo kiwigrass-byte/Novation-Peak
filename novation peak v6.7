@@ -1713,9 +1713,6 @@ end
 -- activeTouchedControlId holds which of the control knobs was touched (HT @oldgearguy)
 local activeTouchedControlId   = -1
 
--- control Ids for the controls that I only want to send MIDI data after I have released the knob
-local CTRL_RELEASE = {318,356,357,358} -- control ids: master clock, transpose, master fine tune, velocity curve 
-
 -- helper function to find match between touched control and target list of controls
 local function get_key_for_value(t, value) 
    if (t ~= nil) then
@@ -1726,8 +1723,16 @@ local function get_key_for_value(t, value)
    return nil
 end
 
+-- sysEx header strings for touch release logic
 local SEND_PATCH_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00} 
 local SEND_SETTINGS_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00}
+
+-- control ids for touch release logic
+local CTRL_CLOCK = 318
+local CTRL_TRANSPOSE = 356
+local CTRL_MASTER_TUNE = 357
+local CTRL_VELOCITY_SHAPE = 358
+local CTRL_RELEASE = {CTRL_CLOCK,CTRL_TRANSPOSE,CTRL_MASTER_TUNE,CTRL_VELOCITY_SHAPE} 
 
 function events.onPotTouchChange(potId, controlId, touched)
   local idx = get_key_for_value(CTRL_RELEASE,controlId)
@@ -1738,17 +1743,17 @@ function events.onPotTouchChange(potId, controlId, touched)
   end
   if (touched == false) and (activeTouchedControlId == controlId) then
     local midiValue = controls.get(controlId):getValue("value"):getMessage():getValue()
-    if controlId == 318 then -- clock
+    if controlId == CTRL_CLOCK then -- clock
       sysExPatch[237] = math.floor(midiValue/2)
       sysExPatch[238] = 64*(midiValue%2)
       midi.sendSysex (port, concat(SEND_PATCH_HEADER,sysExPatch)) -- sends the updated patch to the edit buffer of the Peak
-    elseif controlId == 356 then
+    elseif controlId == CTRL_TRANSPOSE then
       sysExSettings[16] = midiValue
       midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings))  -- sends the updated settings to the Peak
-    elseif controlId == 357 then
+    elseif controlId == CTRL_MASTER_TUNE then
       sysExSettings[15] = midiValue
       midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings)) 
-    elseif controlId == 358 then
+    elseif controlId == CTRL_VELOCITY_SHAPE then
       sysExSettings[14] = midiValue
       midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings)) 
     end
