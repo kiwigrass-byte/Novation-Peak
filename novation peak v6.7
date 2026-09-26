@@ -1,5 +1,6 @@
 -- Novation PEAK preset v6.7
--- 09/25/26
+-- 09/26/26
+
 local authorDate = "New Ignis Kiwigrass"
 info.setText(authorDate)
 
@@ -69,52 +70,10 @@ local function concat(t1, t2)
   return t
 end
 
--- ── Helper: safe controls.get() (pcall-wrapped for deleted/invalid IDs) ────────
+-- helper: safe controls.get() (pcall-wrapped for deleted/invalid IDs) ────────
 local function safeGet(id)
   local ok, c = pcall(controls.get, id)
   return ok and c or nil
-end
-
--- I only want to send some MIDI messages after a control knob is released (for example, to avoid sending a stream of 527 byte sysEx messages when scrolling a settings fader)
--- curCtl holds which of the control knobs was touched (HT @oldgearguy)
-curCtl   = -1
-
--- control Ids for the controls that I only want to send MIDI data after I have released the knob
-local releaseCtls = {318,356,357,358} -- control # of master clock fader, transpose fader, master fine tune fader, velocity curve 
-
--- helper function to find match between touched control and target list of controls
-local function get_key_for_value(t, value) 
-   if (t ~= nil) then
-      for k,v in pairs(t) do
-         if v==value then return k end
-      end
-   end
-   return nil
-end
-
-function events.onPotTouchChange(potId, controlId, touched)
-  local idx = get_key_for_value(releaseCtls,controlId)
-  local sendHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending a patch to Peak's edit buffer 
-  local settingsHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending system settings to Peak 
-  if (idx == nil) then return end
-  if (touched == true) and (curCtl ~= controlId) then curCtl = controlId end
-  if (touched == false) and (curCtl == controlId) then
-    local midiValue = controls.get(controlId):getValue("value"):getMessage():getValue()
-    if curCtl == 318 then -- clock
-      sysExPatch[237] = math.floor(midiValue/2)
-      sysExPatch[238] = 64*(midiValue%2)
-      midi.sendSysex (port, concat(sendHeader,sysExPatch)) -- sends the updated patch to the edit buffer of the Peak
-    elseif curCtl == 356 then
-      sysExSettings[16] = midiValue
-      midi.sendSysex (port, concat(settingsHeader,sysExSettings))  -- sends the updated settings to the Peak
-    elseif curCtl == 357 then
-      sysExSettings[15] = midiValue
-      midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
-    elseif curCtl == 358 then
-      sysExSettings[14] = midiValue
-      midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
-    end
-  end
 end
 
 -- display formatter functions ---------------------------------------------------------------------
@@ -1747,6 +1706,49 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
   if pType == PT_VIRTUAL and pNum == PARAM_COMPARE_IT then
     compareIt(valueObjects[1], midiValue)
     return
+  end
+end
+
+-- I only want to send some MIDI messages after a control knob is released (to avoid sending a stream of sysEx messages when turning a knob)
+-- activeTouchedControlId holds which of the control knobs was touched (HT @oldgearguy)
+local activeTouchedControlId   = -1
+
+-- control Ids for the controls that I only want to send MIDI data after I have released the knob
+local CTRL_RELEASE = {318,356,357,358} -- control ids: master clock, transpose, master fine tune, velocity curve 
+
+-- helper function to find match between touched control and target list of controls
+local function get_key_for_value(t, value) 
+   if (t ~= nil) then
+      for k,v in pairs(t) do
+         if v==value then return k end
+      end
+   end
+   return nil
+end
+
+function events.onPotTouchChange(potId, controlId, touched)
+  local idx = get_key_for_value(CTRL_RELEASE,controlId)
+  if (idx == nil) then return end
+  local sendHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending a patch to Peak's edit buffer 
+  local settingsHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending system settings to Peak 
+  if (idx == nil) then return end
+  if (touched == true) and (activeTouchedControlId ~= controlId) then activeTouchedControlId = controlId end
+  if (touched == false) and (activeTouchedControlId == controlId) then
+    local midiValue = controls.get(controlId):getValue("value"):getMessage():getValue()
+    if curCtl == 318 then -- clock
+      sysExPatch[237] = math.floor(midiValue/2)
+      sysExPatch[238] = 64*(midiValue%2)
+      midi.sendSysex (port, concat(sendHeader,sysExPatch)) -- sends the updated patch to the edit buffer of the Peak
+    elseif curCtl == 356 then
+      sysExSettings[16] = midiValue
+      midi.sendSysex (port, concat(settingsHeader,sysExSettings))  -- sends the updated settings to the Peak
+    elseif curCtl == 357 then
+      sysExSettings[15] = midiValue
+      midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
+    elseif curCtl == 358 then
+      sysExSettings[14] = midiValue
+      midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
+    end
   end
 end
 
