@@ -43,103 +43,6 @@ for y = 1,4 do        -- 1 = bank A, 2= bank B, 3 = bank C, 4 = bank D
     end
 end
 
--- ---------- Persistence helpers for patch-name cache ----------
--- Electra One runtime in this preset:
---   persist(table)
---   recall(table)
--- We persist a tagged flat map and rebuild nameBank on load.
-
--- a tag to keep track of versions of patch-banks on the Peak 
-local PERSIST_TAG = "peakPatchNamesV1"
-
-local function makePatchKey(bank, patch)
-  return string.format("b%d_p%03d", bank, patch) -- bank 1..4, patch 0..127
-end
-
-local function flattenNameBank(src)
-  local flat = {}
-  local count = 0
-  for b = 1, 4 do
-    for p = 0, 127 do
-      local v = src[b] and src[b][p] or ""
-      v = tostring(v or "")
-      flat[makePatchKey(b, p)] = v
-      if v ~= "" then count = count + 1 end
-    end
-  end
-  return flat, count
-end
-
-local function inflateNameBank(flat)
-  local dst = {}
-  local count = 0
-  for b = 1, 4 do
-    dst[b] = {}
-    for p = 0, 127 do
-      local v = (flat and flat[makePatchKey(b, p)]) or ""
-      dst[b][p] = v
-      if v ~= "" then count = count + 1 end
-    end
-  end
-  return dst, count
-end
-
-local function saveNameBank()
-  local flat, count = flattenNameBank(nameBank)
-  local payload = {
-    _tag = PERSIST_TAG,
-    names = flat
-  }
-  local ok, err = pcall(persist, payload)
-  if ok then
-    print(string.format("nameBank persisted (%d non-empty names)", count))
-  else
-    print("nameBank persist failed: " .. tostring(err))
-  end
-end
-
-local function loadNameBank()
-  local payload = {}
-  local ok, err = pcall(recall, payload) -- recall(destinationTable)
-  if not ok then
-    print("nameBank recall failed: " .. tostring(err))
-    return
-  end
-  if payload._tag ~= PERSIST_TAG then
-    print("nameBank recall: no matching persisted payload tag")
-    return
-  end
-  if type(payload.names) ~= "table" then
-    print("nameBank recall: payload.names missing/invalid")
-    return
-  end
-  local rebuilt, count = inflateNameBank(payload.names)
-  nameBank = rebuilt
-  print(string.format("nameBank restored (%d non-empty names)", count))
-end
-
--- Debounced/controlled persistence during large scans
-local nameBankDirty = false
-local nameBankUpdates = 0
-local SAVE_EVERY_N_UPDATES = 128 
-
-local function markNameBankDirty()
-  nameBankDirty = true
-  nameBankUpdates = nameBankUpdates + 1
-  -- periodic checkpoint save during long scans
-  if (nameBankUpdates % SAVE_EVERY_N_UPDATES) == 0 then
-    saveNameBank()
-    nameBankDirty = false
-  end
-end
-
-local function flushNameBankIfDirty()
-  if nameBankDirty then
-    saveNameBank()
-    nameBankDirty = false
-  end
-end
-
 -- helper function to find target array from a table of arrays
 local function findArrayByValue(tbl, targetValue1,targetValue2) 
     for i, arr in ipairs(tbl) do
@@ -627,11 +530,109 @@ local function acknowledgeStartupWaveName(slot)
     startupWavePending[slot] = nil
   end
   if next(startupWavePending) == nil then
+    print("All 10 user wavetable names received")
     requestStartupSettingsOnce()
   end
 end
 
------------------- Schedule patch scanning ------------------------
+-- ---------- Persistence helpers for patch-name cache ----------
+-- Electra One runtime in this preset:
+--   persist(table)
+--   recall(table)
+-- We persist a tagged flat map and rebuild nameBank on load.
+
+-- a tag to keep track of versions of patch-banks on the Peak 
+local PERSIST_TAG = "peakPatchNamesV1"
+
+local function makePatchKey(bank, patch)
+  return string.format("b%d_p%03d", bank, patch) -- bank 1..4, patch 0..127
+end
+
+local function flattenNameBank(src)
+  local flat = {}
+  local count = 0
+  for b = 1, 4 do
+    for p = 0, 127 do
+      local v = src[b] and src[b][p] or ""
+      v = tostring(v or "")
+      flat[makePatchKey(b, p)] = v
+      if v ~= "" then count = count + 1 end
+    end
+  end
+  return flat, count
+end
+
+local function inflateNameBank(flat)
+  local dst = {}
+  local count = 0
+  for b = 1, 4 do
+    dst[b] = {}
+    for p = 0, 127 do
+      local v = (flat and flat[makePatchKey(b, p)]) or ""
+      dst[b][p] = v
+      if v ~= "" then count = count + 1 end
+    end
+  end
+  return dst, count
+end
+
+local function saveNameBank()
+  local flat, count = flattenNameBank(nameBank)
+  local payload = {
+    _tag = PERSIST_TAG,
+    names = flat
+  }
+  local ok, err = pcall(persist, payload)
+  if ok then
+    print(string.format("nameBank persisted (%d non-empty names)", count))
+  else
+    print("nameBank persist failed: " .. tostring(err))
+  end
+end
+
+local function loadNameBank()
+  local payload = {}
+  local ok, err = pcall(recall, payload) -- recall(destinationTable)
+  if not ok then
+    print("nameBank recall failed: " .. tostring(err))
+    return
+  end
+  if payload._tag ~= PERSIST_TAG then
+    print("nameBank recall: no matching persisted payload tag")
+    return
+  end
+  if type(payload.names) ~= "table" then
+    print("nameBank recall: payload.names missing/invalid")
+    return
+  end
+  local rebuilt, count = inflateNameBank(payload.names)
+  nameBank = rebuilt
+  print(string.format("nameBank restored (%d non-empty names)", count))
+end
+
+-- Debounced/controlled persistence during large scans
+local nameBankDirty = false
+local nameBankUpdates = 0
+local SAVE_EVERY_N_UPDATES = 128 
+
+local function markNameBankDirty()
+  nameBankDirty = true
+  nameBankUpdates = nameBankUpdates + 1
+  -- periodic checkpoint save during long scans
+  if (nameBankUpdates % SAVE_EVERY_N_UPDATES) == 0 then
+    saveNameBank()
+    nameBankDirty = false
+  end
+end
+
+local function flushNameBankIfDirty()
+  if nameBankDirty then
+    saveNameBank()
+    nameBankDirty = false
+  end
+end
+
+------------------ Schedule patch scanning to extract patch name ------------------------
 local patchScanState = {
   bank = 1,           -- current bank (1-4)
   patch = 0,          -- current patch (0-127)
@@ -1608,7 +1609,6 @@ function midi.onSysex(midiInput, sysexBlock)
   end
   -- user wavetable name received 
   if len == 23 and cmd == 0x07 then
-    print("user wavetable name received") 
     local slot = sysexBlock:peek(15)
     local waveName = ""
     for i = 1, 7 do 
