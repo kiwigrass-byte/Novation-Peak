@@ -1645,10 +1645,10 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
   if pType == PT_VIRTUAL and pNum < 8000 then
     sendSimpleNRPN(pNum, midiValue)
   end
-  if pType == PT_CC7 and pNum < 8000 then
+  if pType == PT_CC7 and pNum < 128 then
     midi.sendControlChange(port, channel, pNum, midiValue)
   end
-  if pType == PT_CC14 and pNum < 8000 then
+  if pType == PT_CC14 and pNum < 128 then
     midi.sendControlChange14Bit(port, channel, pNum, midiValue)
   end
   -- Patch cue toggle
