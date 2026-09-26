@@ -1,7 +1,7 @@
 -- Novation PEAK preset v6.7
 -- 09/26/26
 
-local authorDate = "New Ignis Kiwigrass"
+local authorDate = "Kiwigrass"
 info.setText(authorDate)
 
 -- Preset compatibility check
@@ -44,6 +44,14 @@ for y = 1,4 do        -- 1 = bank A, 2= bank B, 3 = bank C, 4 = bank D
     end
 end
 
+-- helper function to remove empty spaces from patch names before they are stored
+local function cleanPatchName(s)
+  -- remove NULs first, then trim trailing whitespace
+  s = s:gsub("%z", "")
+  s = s:gsub("%s+$", "")
+  return s
+end
+
 -- helper function to find target array from a table of arrays
 local function findArrayByValue(tbl, targetValue1,targetValue2) 
     for i, arr in ipairs(tbl) do
@@ -68,12 +76,6 @@ local function concat(t1, t2)
   for i=1,#t1 do t[#t+1] = t1[i] end
   for i=1,#t2 do t[#t+1] = t2[i] end
   return t
-end
-
--- helper: safe controls.get() (pcall-wrapped for deleted/invalid IDs) ────────
-local function safeGet(id)
-  local ok, c = pcall(controls.get, id)
-  return ok and c or nil
 end
 
 -- display formatter functions ---------------------------------------------------------------------
@@ -107,11 +109,12 @@ function displayNotes (valueObject, value)
   end
 end
 
+local CTRL_PATCH_NUMBER = 423
 function displayPatch (valueObject, value)
   local bankTxt={"A","B","C","D"} -- abbreviations of the bank names
   local bankNum = parameterMap.get (deviceId, PT_VIRTUAL, 10032)
   local patchName = nameBank[bankNum][value]
-  local c423 = safeGet(423); if c423 then c423:setName(patchName) end
+  controls.get(CTRL_PATCH_NUMBER):setName(patchName)
   return (bankTxt[bankNum].." "..string.format("%03d",value))
 end
 
@@ -1547,14 +1550,6 @@ function assignSettings()
       parameterMap.updateValue(deviceId, PT_VIRTUAL, param[i][2], sysExSettings[param[i][1]])
     end
   end)
-end
-
--- helper function to remove empty spaces from patch names before they are stored
-local function cleanPatchName(s)
-  -- remove NULs first, then trim trailing whitespace
-  s = s:gsub("%z", "")
-  s = s:gsub("%s+$", "")
-  return s
 end
 
 ----------------------------- midi receive processing functions ----------------------------------------
