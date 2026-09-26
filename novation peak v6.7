@@ -584,6 +584,53 @@ function getAllWaveNames(valueObject, value)
   end
 end
 
+local STARTUP_WAVE_FIRST_SLOT = 64
+local STARTUP_WAVE_LAST_SLOT = 73
+local STARTUP_WAVE_TIMEOUT_MS = 800
+local startupWavePending = {}
+local startupWaveHandshakeActive = false
+local startupSettingsRequested = false
+local startupWaveTimeoutHandle = nil
+
+local function resetStartupWavePending()
+  startupWavePending = {}
+  for slot = STARTUP_WAVE_FIRST_SLOT, STARTUP_WAVE_LAST_SLOT do
+    startupWavePending[slot] = true
+  end
+end
+
+local function cancelStartupWaveTimeout()
+  if startupWaveTimeoutHandle ~= nil then
+    schedule.cancel(startupWaveTimeoutHandle)
+    startupWaveTimeoutHandle = nil
+  end
+end
+
+local function requestStartupSettingsOnce()
+  if startupSettingsRequested then
+    return
+  end
+  startupSettingsRequested = true
+  startupWaveHandshakeActive = false
+  cancelStartupWaveTimeout()
+  getSettings(nil, 1)
+end
+
+local function acknowledgeStartupWaveName(slot)
+  if not startupWaveHandshakeActive then
+    return
+  end
+  if slot < STARTUP_WAVE_FIRST_SLOT or slot > STARTUP_WAVE_LAST_SLOT then
+    return
+  end
+  if startupWavePending[slot] ~= nil then
+    startupWavePending[slot] = nil
+  end
+  if next(startupWavePending) == nil then
+    requestStartupSettingsOnce()
+  end
+end
+
 ------------------ Schedule patch scanning ------------------------
 local patchScanState = {
   bank = 1,           -- current bank (1-4)
@@ -1562,11 +1609,13 @@ function midi.onSysex(midiInput, sysexBlock)
   -- user wavetable name received 
   if len == 23 and cmd == 0x07 then
     print("user wavetable name received") 
+    local slot = sysexBlock:peek(15)
     local waveName = ""
     for i = 1, 7 do 
       waveName = waveName .. string.char(sysexBlock:peek(i+15))
     end
-    waveTableNames[sysexBlock:peek(15)] = waveName
+    waveTableNames[slot] = waveName
+    acknowledgeStartupWaveName(slot)
   end
 end
 
@@ -1708,6 +1757,10 @@ function preset.onLoad()
 end
 
 function preset.onReady()
+  cancelStartupWaveTimeout()
+  startupSettingsRequested = false
+  resetStartupWavePending()
+  startupWaveHandshakeActive = true
   getAllWaveNames(nil,1)
-  schedule.after(1000,getSettings,nil,1)
+  startupWaveTimeoutHandle = schedule.after(STARTUP_WAVE_TIMEOUT_MS, requestStartupSettingsOnce)
 end
