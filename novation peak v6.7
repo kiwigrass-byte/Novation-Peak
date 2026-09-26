@@ -1726,28 +1726,31 @@ local function get_key_for_value(t, value)
    return nil
 end
 
+local SEND_PATCH_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00} 
+local SEND_SETTINGS_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00}
+
 function events.onPotTouchChange(potId, controlId, touched)
   local idx = get_key_for_value(CTRL_RELEASE,controlId)
   if (idx == nil) then return end
-  local sendHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending a patch to Peak's edit buffer 
-  local settingsHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending system settings to Peak 
-  if (idx == nil) then return end
-  if (touched == true) and (activeTouchedControlId ~= controlId) then activeTouchedControlId = controlId end
+  if (touched == true) and (activeTouchedControlId ~= controlId) then 
+    activeTouchedControlId = controlId 
+    return 
+  end
   if (touched == false) and (activeTouchedControlId == controlId) then
     local midiValue = controls.get(controlId):getValue("value"):getMessage():getValue()
-    if curCtl == 318 then -- clock
+    if controlId == 318 then -- clock
       sysExPatch[237] = math.floor(midiValue/2)
       sysExPatch[238] = 64*(midiValue%2)
-      midi.sendSysex (port, concat(sendHeader,sysExPatch)) -- sends the updated patch to the edit buffer of the Peak
-    elseif curCtl == 356 then
+      midi.sendSysex (port, concat(SEND_PATCH_HEADER,sysExPatch)) -- sends the updated patch to the edit buffer of the Peak
+    elseif controlId == 356 then
       sysExSettings[16] = midiValue
-      midi.sendSysex (port, concat(settingsHeader,sysExSettings))  -- sends the updated settings to the Peak
-    elseif curCtl == 357 then
+      midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings))  -- sends the updated settings to the Peak
+    elseif controlId == 357 then
       sysExSettings[15] = midiValue
-      midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
-    elseif curCtl == 358 then
+      midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings)) 
+    elseif controlId == 358 then
       sysExSettings[14] = midiValue
-      midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
+      midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings)) 
     end
   end
 end
