@@ -89,6 +89,14 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - The explicit handle makes cancellation deterministic and prevents a scanner
   from continuing after it has completed, been stopped, or otherwise needs to
   yield to other preset activity.
+  
+### 8) Startup sequencing: event-driven wave-name handshake with timeout fallback
+- On `preset.onReady()`, request all 10 user wavetable names first (slots 64–73).
+- Do **not** request settings on a fixed long delay by default.
+- Instead, track incoming wavetable-name replies in `midi.onSysex` (cmd `0x07`) and request settings immediately once all expected replies are received.
+- Keep a timeout fallback (`schedule.after(...)`) so startup can still continue if one or more replies are missing.
+- Guard the settings request with a one-shot flag to prevent duplicate sends when “all replies received” and timeout occur close together.
+- In this preset, this reduces unnecessary startup latency versus a fixed 1 s delay while preserving robustness on slower or lossy MIDI paths.
 
 ### Applied in this preset
 - Patch scanning uses `schedule.every()` with a 200 ms interval.
