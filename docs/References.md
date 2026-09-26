@@ -103,7 +103,15 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - Keep a timeout fallback (`schedule.after`) so settings are still requested if one or more wavetable replies are missing.
 - Use a one-shot guard so settings request is sent only once even if completion and timeout race.
 - Reduced startup log noise by printing a single completion message once all 10 wavetable names are received.
-- 
+
+ ### 9) Unset MIDI value
+- MIDI_VALUE_DO_NOT_SEND
+- The value a message holds when it has nothing to send - a pad that sends something when it is pressed and nothing when it is let go writes this in its off value.
+- It is 16537, which is not a MIDI value of any width, so it can never be mistaken for one.
+- It is accepted by the setters that build a message and refused by everything that sends: parameterMap.set() and the midi.send* functions take 0 to 16383.
+- <message>:isValueSet() and <value>:isSet() ask the same question without the number.
+- The preset had several params in assignParams that were for the Summit and so there was no Peak parameter. This generated 16537 messages.  It was useful way to identify unused parameters that could be removed.  
+
 ### Applied in this preset
 - Patch scanning uses `schedule.every()` with a 200 ms interval.
 - `scanHandle` is retained so the repeating task can be cancelled.
