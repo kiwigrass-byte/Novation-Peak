@@ -69,10 +69,7 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - For timer-driven or rapidly repeating value changes (e.g., an LFO), use `parameterMap.modulate` instead of `parameterMap.set`/`updateValue`.
 - This avoids repeated map writes, callback dispatch, and formatter re-evaluation on every tick, while still transmitting the live value to the synth.
 - Keep a separate baseline cache for the "real" stored value, since `modulate` does not update the Parameter Map.
-- In macro S&H target selection, hard clamping candidate values to `0..1` caused edge stickiness near 0%/100% because outward moves collapsed to the boundary.
-- Replaced clamp-based edge handling with reflected boundaries so overshoot is mirrored back into range, preserving motion while keeping normalized targets.
-- Result: less boundary dwell, smoother perceived movement near the macro range limits.
-  
+   
 ### 7) Scheduled background work: prefer `schedule` over a shared timer
 - The patch scanner was migrated from the shared `timer.onTick` callback to
   `schedule.every(SCAN_PERIOD_MS, scanNextPatch)`.
@@ -113,6 +110,13 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - It is accepted by the setters that build a message and refused by everything that sends: parameterMap.set() and the midi.send* functions take 0 to 16383.
 - <message>:isValueSet() and <value>:isSet() ask the same question without the number.
 - The earlier versions of the preset had several params in assignParams() that were for the Summit and so there was no Peak parameter. This generated 16537 messages.  It was useful way to identify unused parameters that could be removed.  
+
+### 10) macro-LFO
+- In macro S&H target selection, hard clamping candidate values to `0..1` caused edge stickiness near 0%/100% because outward moves collapsed to the boundary.
+- Replaced clamp-based edge handling with reflected boundaries so overshoot is mirrored back into range, preserving motion while keeping normalized targets.
+- Result: less boundary dwell, smoother perceived movement near the macro range limits.
+- Triangle mode changes continuously on every LFO tick, while S&H holds each sampled target for most of its cycle.
+- As a result, S&H may require a faster rate to feel continuously active; slower rates intentionally produce longer held movements.
 
 ### Applied in this preset
 - Patch scanning uses `schedule.every()` with a 200 ms interval.
