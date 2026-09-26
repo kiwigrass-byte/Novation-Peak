@@ -7,12 +7,21 @@ This file captures external documentation and project conventions we rely on whe
 - Electra One developer docs (fw 5.0): https://docs.electra.one/5.0/developers/
 - Architecture / value-change flow: https://docs.electra.one/5.0/developers/architecture.html#what-happens-when-a-value-changes
 
-## Key API feature
+## Key API features
 
 - `parameterMap.transaction(fn)`
   - Use for bulk patch-parse apply paths (e.g., `assignParam()`).
   - While transaction is open: map updates are held, callbacks are deferred, UI redraw is coalesced.
   - On close: screen/map updates once per changed parameter.
+
+- `parameterMap.modulate(deviceId, type, parameterNumber, modulationValue, depth)`
+  - Temporarily changes (modulates) the MIDI value of a Parameter Map entry.
+  - The modulated value **is sent**, but it is **not saved** in the Parameter Map and is **not processed** by Lua callbacks or value formatters.
+  - `parameterMap.onChange()` is **not called** for it either.
+  - The modulation is spread over the range of the entry's first message and held inside it. For a message with no sign, that range is its MIDI min .. max.
+  - Ideal for high-frequency temporary value changes (e.g., an LFO timer modulating mod-amount depth) because it avoids the overhead of `set`/`updateValue` (no map write, no callback dispatch, no formatter re-run) while still transmitting the live value.
+  - Used in this preset for the macro-amount LFO (`applyCurrentMacroLfoValue` → `modulateAmountFromBaseline`) instead of repeatedly calling `parameterMap.set`/`updateValue` on a timer tick, which previously caused unnecessary map writes, callback churn, and UI repaint pressure at LFO tick rate.
+  - Baseline handling: because `modulate` does not alter the stored Parameter Map value, the script keeps its own baseline cache (`lfoMapBaseline`) captured when the LFO starts, so the modulation depth/direction can be computed relative to the *stored* value rather than the transient modulated one.
 
 ## Project lessons learned (Novation Peak preset)
 
@@ -55,6 +64,11 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - mod matrix dim/update refresh
 - snapshot capture
 - patch name/info text refresh
+
+### 6) High-frequency updates: prefer modulate over set/updateValue
+- For timer-driven or rapidly repeating value changes (e.g., an LFO), use `parameterMap.modulate` instead of `parameterMap.set`/`updateValue`.
+- This avoids repeated map writes, callback dispatch, and formatter re-evaluation on every tick, while still transmitting the live value to the synth.
+- Keep a separate baseline cache for the "real" stored value, since `modulate` does not update the Parameter Map.
 
 ## Preset UX conventions in this repo
 
