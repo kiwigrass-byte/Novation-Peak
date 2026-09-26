@@ -362,29 +362,49 @@ function setSync(valueObject, value)
 end
 
 -- visibility options for voice options
-function voiceMode(valueObject, value)
-  local visiBool = value <= 1 -- showing monotrig if in mono or monoLG mode
-  for _,id in ipairs({118,130,142}) do controls.get(id):setVisible(visiBool) end -- envelope monotrig
-  local visiBool = value <= 2 -- showing lfo monotrig if in monophonic mode
-  for _,id in ipairs({149,161,155,167}) do controls.get(id):setVisible(visiBool) end -- lfo monotrig, fade sync
-  controls.get(156):setSlot(11, 5)
-  controls.get(168):setSlot(23, 5)
-  for _,id in ipairs({156,168}) do controls.get(id):setVisible(not visiBool) end -- lfo common sync
+local CTRL_ENV_TRIG = {118, 130, 142}
+local CTRL_LFO_SYNC = {156, 168}
+local CTRL_LFO_TRIG = {149, 161, 155, 167}
+
+local function updateVoiceModeUI(value)
+  -- showing monotrig if in mono or monoLG mode
+  local envelopeMonoTrigVisible = value <= 1
+  for _, id in ipairs({ CTRL_ENV_TRIG[1], CTRL_ENV_TRIG[2], CTRL_ENV_TRIG[3] }) do
+    controls.get(id):setVisible(envelopeMonoTrigVisible)
+  end
+  -- showing lfo monotrig if in monophonic mode
+  local lfoMonoTrigVisible = value <= 2
+  for _, id in ipairs(CTRL_LFO_TRIG) do
+    controls.get(id):setVisible(lfoMonoTrigVisible)
+  end
+  -- lfo common sync
+  controls.get(CTRL_LFO_SYNC[1]):setSlot(11, 5)
+  controls.get(CTRL_LFO_SYNC[2]):setSlot(23, 5)
+  for _, id in ipairs(CTRL_LFO_SYNC) do
+    controls.get(id):setVisible(not lfoMonoTrigVisible)
+  end
 end
 
+function voiceMode(valueObject, value)
+  updateVoiceModeUI(value)
+end
+
+local CTRL_EG_LOOP = {119, 131, 143}
 function egLoop(valueObject, value)
   local parameter = valueObject:getMessage():getParameterNumber()
   local egNumber = parameter - 3226
-  controls.get(({119,131,143})[egNumber]):setVisible(value == 1) -- repeats
+  controls.get((CTRL_EG_LOOP)[egNumber]):setVisible(value == 1) -- repeats
 end
 
+local CTRL_UNISON_DETUNE = 48
 function unison(valueObject, value)
-  controls.get(48):setColor(value == 0 and 0x202020 or WHITE)
+  controls.get(CTRL_UNISON_DETUNE):setColor(value == 0 and 0x202020 or WHITE)
 end
 
+local CTRL_GLIDE = {418, 419}
 function glide(valueObject, value)
   local color = (value == 0) and 0x001013 or GREEN
-  for i = 1,2 do controls.get(({418,419})[i]):setColor(color) end
+  for i = 1,2 do controls.get(CTRL_GLIDE[i]):setColor(color) end
 end
 
 ---------------------------- MIDI send functions ---------------------------------------
