@@ -1542,9 +1542,11 @@ end
 function assignSettings()  
   if not sysExSettings[2] then return end
   local param = {{2,8192},{8,8198},{14,8204},{15,8205},{16,8206},{17,8207},{19,8209},{31,8221},{32,8222}}
-  for i = 1, #param do
-    parameterMap.updateValue(deviceId, PT_VIRTUAL, param[i][2], sysExSettings[param[i][1]])
-  end
+  parameterMap.transaction(function()
+    for i = 1, #param do
+      parameterMap.updateValue(deviceId, PT_VIRTUAL, param[i][2], sysExSettings[param[i][1]])
+    end
+  end)
 end
 
 -- helper function to remove empty spaces from patch names before they are stored
