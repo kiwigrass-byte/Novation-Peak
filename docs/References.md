@@ -70,6 +70,23 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - This avoids repeated map writes, callback dispatch, and formatter re-evaluation on every tick, while still transmitting the live value to the synth.
 - Keep a separate baseline cache for the "real" stored value, since `modulate` does not update the Parameter Map.
 
+## Runtime responsiveness / lock behavior (important)
+
+Electra One script execution and paint callbacks contend for a shared lock.  
+If script work holds the lock too long, paint can miss frames (around 20 ms timeout) and controls appear unresponsive.
+
+### Practical rules
+- Do small chunks of work frequently instead of long blocks.
+- Avoid `helpers.delay()` for waits (it blocks while holding the lock).
+- Prefer `schedule.after()` / `schedule.every()` / `midi.at()` so work is deferred and script can return.
+- Keep paint callbacks draw-only; precompute elsewhere and render cached values.
+- High-frequency modulation should avoid expensive map/callback churn.
+
+### Applied in this preset
+- For timer-driven LFO updates, prefer `parameterMap.modulate(...)` over `set`/`updateValue`.
+- `modulate` sends live MIDI without writing map state or triggering callbacks/formatters, reducing lock-hold pressure and improving UI responsiveness.
+- For large patch parsing, use `parameterMap.transaction(...)` to coalesce map activity and avoid per-parameter callback storms during ingest.
+  
 ## Preset UX conventions in this repo
 
 - Patch scroll and patch select are separate controls.
