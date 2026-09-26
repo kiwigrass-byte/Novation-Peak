@@ -1,5 +1,6 @@
 -- Novation PEAK preset v6.7
--- 09/25/26
+-- 09/26/26
+
 local authorDate = "New Ignis Kiwigrass"
 info.setText(authorDate)
 
@@ -43,103 +44,6 @@ for y = 1,4 do        -- 1 = bank A, 2= bank B, 3 = bank C, 4 = bank D
     end
 end
 
--- ---------- Persistence helpers for patch-name cache ----------
--- Electra One runtime in this preset:
---   persist(table)
---   recall(table)
--- We persist a tagged flat map and rebuild nameBank on load.
-
--- a tag to keep track of versions of patch-banks on the Peak 
-local PERSIST_TAG = "peakPatchNamesV1"
-
-local function makePatchKey(bank, patch)
-  return string.format("b%d_p%03d", bank, patch) -- bank 1..4, patch 0..127
-end
-
-local function flattenNameBank(src)
-  local flat = {}
-  local count = 0
-  for b = 1, 4 do
-    for p = 0, 127 do
-      local v = src[b] and src[b][p] or ""
-      v = tostring(v or "")
-      flat[makePatchKey(b, p)] = v
-      if v ~= "" then count = count + 1 end
-    end
-  end
-  return flat, count
-end
-
-local function inflateNameBank(flat)
-  local dst = {}
-  local count = 0
-  for b = 1, 4 do
-    dst[b] = {}
-    for p = 0, 127 do
-      local v = (flat and flat[makePatchKey(b, p)]) or ""
-      dst[b][p] = v
-      if v ~= "" then count = count + 1 end
-    end
-  end
-  return dst, count
-end
-
-local function saveNameBank()
-  local flat, count = flattenNameBank(nameBank)
-  local payload = {
-    _tag = PERSIST_TAG,
-    names = flat
-  }
-  local ok, err = pcall(persist, payload)
-  if ok then
-    print(string.format("nameBank persisted (%d non-empty names)", count))
-  else
-    print("nameBank persist failed: " .. tostring(err))
-  end
-end
-
-local function loadNameBank()
-  local payload = {}
-  local ok, err = pcall(recall, payload) -- recall(destinationTable)
-  if not ok then
-    print("nameBank recall failed: " .. tostring(err))
-    return
-  end
-  if payload._tag ~= PERSIST_TAG then
-    print("nameBank recall: no matching persisted payload tag")
-    return
-  end
-  if type(payload.names) ~= "table" then
-    print("nameBank recall: payload.names missing/invalid")
-    return
-  end
-  local rebuilt, count = inflateNameBank(payload.names)
-  nameBank = rebuilt
-  print(string.format("nameBank restored (%d non-empty names)", count))
-end
-
--- Debounced/controlled persistence during large scans
-local nameBankDirty = false
-local nameBankUpdates = 0
-local SAVE_EVERY_N_UPDATES = 128 
-
-local function markNameBankDirty()
-  nameBankDirty = true
-  nameBankUpdates = nameBankUpdates + 1
-  -- periodic checkpoint save during long scans
-  if (nameBankUpdates % SAVE_EVERY_N_UPDATES) == 0 then
-    saveNameBank()
-    nameBankDirty = false
-  end
-end
-
-local function flushNameBankIfDirty()
-  if nameBankDirty then
-    saveNameBank()
-    nameBankDirty = false
-  end
-end
-
 -- helper function to find target array from a table of arrays
 local function findArrayByValue(tbl, targetValue1,targetValue2) 
     for i, arr in ipairs(tbl) do
@@ -166,52 +70,10 @@ local function concat(t1, t2)
   return t
 end
 
--- ── Helper: safe controls.get() (pcall-wrapped for deleted/invalid IDs) ────────
+-- helper: safe controls.get() (pcall-wrapped for deleted/invalid IDs) ────────
 local function safeGet(id)
   local ok, c = pcall(controls.get, id)
   return ok and c or nil
-end
-
--- I only want to send some MIDI messages after a control knob is released (for example, to avoid sending a stream of 527 byte sysEx messages when scrolling a settings fader)
--- curCtl holds which of the control knobs was touched (HT @oldgearguy)
-curCtl   = -1
-
--- control Ids for the controls that I only want to send MIDI data after I have released the knob
-local releaseCtls = {318,356,357,358} -- control # of master clock fader, transpose fader, master fine tune fader, velocity curve 
-
--- helper function to find match between touched control and target list of controls
-local function get_key_for_value(t, value) 
-   if (t ~= nil) then
-      for k,v in pairs(t) do
-         if v==value then return k end
-      end
-   end
-   return nil
-end
-
-function events.onPotTouchChange(potId, controlId, touched)
-  local idx = get_key_for_value(releaseCtls,controlId)
-  local sendHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending a patch to Peak's edit buffer 
-  local settingsHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending system settings to Peak 
-  if (idx == nil) then return end
-  if (touched == true) and (curCtl ~= controlId) then curCtl = controlId end
-  if (touched == false) and (curCtl == controlId) then
-    local midiValue = controls.get(controlId):getValue("value"):getMessage():getValue()
-    if curCtl == 318 then -- clock
-      sysExPatch[237] = math.floor(midiValue/2)
-      sysExPatch[238] = 64*(midiValue%2)
-      midi.sendSysex (port, concat(sendHeader,sysExPatch)) -- sends the updated patch to the edit buffer of the Peak
-    elseif curCtl == 356 then
-      sysExSettings[16] = midiValue
-      midi.sendSysex (port, concat(settingsHeader,sysExSettings))  -- sends the updated settings to the Peak
-    elseif curCtl == 357 then
-      sysExSettings[15] = midiValue
-      midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
-    elseif curCtl == 358 then
-      sysExSettings[14] = midiValue
-      midi.sendSysex (port, concat(settingsHeader,sysExSettings)) 
-    end
-  end
 end
 
 -- display formatter functions ---------------------------------------------------------------------
@@ -584,7 +446,152 @@ function getAllWaveNames(valueObject, value)
   end
 end
 
------------------- Schedule patch scanning ------------------------
+local STARTUP_WAVE_FIRST_SLOT = 64
+local STARTUP_WAVE_LAST_SLOT = 73
+local STARTUP_WAVE_TIMEOUT_MS = 800
+local startupWavePending = {}
+local startupWaveHandshakeActive = false
+local startupSettingsRequested = false
+local startupWaveTimeoutHandle = nil
+
+local function resetStartupWavePending()
+  startupWavePending = {}
+  for slot = STARTUP_WAVE_FIRST_SLOT, STARTUP_WAVE_LAST_SLOT do
+    startupWavePending[slot] = true
+  end
+end
+
+local function cancelStartupWaveTimeout()
+  if startupWaveTimeoutHandle ~= nil then
+    schedule.cancel(startupWaveTimeoutHandle)
+    startupWaveTimeoutHandle = nil
+  end
+end
+
+local function requestStartupSettingsOnce()
+  if startupSettingsRequested then
+    return
+  end
+  startupSettingsRequested = true
+  startupWaveHandshakeActive = false
+  cancelStartupWaveTimeout()
+  getSettings(nil, 1)
+end
+
+local function acknowledgeStartupWaveName(slot)
+  if not startupWaveHandshakeActive then
+    return
+  end
+  if slot < STARTUP_WAVE_FIRST_SLOT or slot > STARTUP_WAVE_LAST_SLOT then
+    return
+  end
+  if startupWavePending[slot] ~= nil then
+    startupWavePending[slot] = nil
+  end
+  if next(startupWavePending) == nil then
+    print("All 10 user wavetable names received")
+    requestStartupSettingsOnce()
+  end
+end
+
+-- ---------- Persistence helpers for patch-name cache ----------
+-- Electra One runtime in this preset:
+--   persist(table)
+--   recall(table)
+-- We persist a tagged flat map and rebuild nameBank on load.
+
+-- a tag to keep track of versions of patch-banks on the Peak 
+local PERSIST_TAG = "peakPatchNamesV1"
+
+local function makePatchKey(bank, patch)
+  return string.format("b%d_p%03d", bank, patch) -- bank 1..4, patch 0..127
+end
+
+local function flattenNameBank(src)
+  local flat = {}
+  local count = 0
+  for b = 1, 4 do
+    for p = 0, 127 do
+      local v = src[b] and src[b][p] or ""
+      v = tostring(v or "")
+      flat[makePatchKey(b, p)] = v
+      if v ~= "" then count = count + 1 end
+    end
+  end
+  return flat, count
+end
+
+local function inflateNameBank(flat)
+  local dst = {}
+  local count = 0
+  for b = 1, 4 do
+    dst[b] = {}
+    for p = 0, 127 do
+      local v = (flat and flat[makePatchKey(b, p)]) or ""
+      dst[b][p] = v
+      if v ~= "" then count = count + 1 end
+    end
+  end
+  return dst, count
+end
+
+local function saveNameBank()
+  local flat, count = flattenNameBank(nameBank)
+  local payload = {
+    _tag = PERSIST_TAG,
+    names = flat
+  }
+  local ok, err = pcall(persist, payload)
+  if ok then
+    print(string.format("nameBank persisted (%d non-empty names)", count))
+  else
+    print("nameBank persist failed: " .. tostring(err))
+  end
+end
+
+local function loadNameBank()
+  local payload = {}
+  local ok, err = pcall(recall, payload) -- recall(destinationTable)
+  if not ok then
+    print("nameBank recall failed: " .. tostring(err))
+    return
+  end
+  if payload._tag ~= PERSIST_TAG then
+    print("nameBank recall: no matching persisted payload tag")
+    return
+  end
+  if type(payload.names) ~= "table" then
+    print("nameBank recall: payload.names missing/invalid")
+    return
+  end
+  local rebuilt, count = inflateNameBank(payload.names)
+  nameBank = rebuilt
+  print(string.format("nameBank restored (%d non-empty names)", count))
+end
+
+-- Debounced/controlled persistence during large scans
+local nameBankDirty = false
+local nameBankUpdates = 0
+local SAVE_EVERY_N_UPDATES = 128 
+
+local function markNameBankDirty()
+  nameBankDirty = true
+  nameBankUpdates = nameBankUpdates + 1
+  -- periodic checkpoint save during long scans
+  if (nameBankUpdates % SAVE_EVERY_N_UPDATES) == 0 then
+    saveNameBank()
+    nameBankDirty = false
+  end
+end
+
+local function flushNameBankIfDirty()
+  if nameBankDirty then
+    saveNameBank()
+    nameBankDirty = false
+  end
+end
+
+------------------ Schedule patch scanning to extract patch name ------------------------
 local patchScanState = {
   bank = 1,           -- current bank (1-4)
   patch = 0,          -- current patch (0-127)
@@ -906,6 +913,20 @@ local function clamp01(value)
   return value
 end
 
+-- Reflect a value back into the normalized 0..1 range.
+-- Unlike clamping, this preserves the overshoot at the boundary.
+local function reflect01(value)
+  while value < 0 or value > 1 do
+    if value < 0 then
+      value = -value
+    elseif value > 1 then
+      value = 2 - value
+    end
+  end
+
+  return value
+end
+
 -- Triangle waveform:
 -- phase 0.0   = minimum
 -- phase 0.5   = maximum
@@ -960,7 +981,7 @@ local function chooseNextSampleAndHoldTarget()
     macroLfoState.shFromValue
     + signedRandom * MACRO_LFO_SH_MAX_STEP
 
-  macroLfoState.shToValue = clamp01(newTarget)
+  macroLfoState.shToValue = reflect01(newTarget)
 end
 
 local function updateSampleAndHoldGlide()
@@ -1561,12 +1582,13 @@ function midi.onSysex(midiInput, sysexBlock)
   end
   -- user wavetable name received 
   if len == 23 and cmd == 0x07 then
-    print("user wavetable name received") 
+    local slot = sysexBlock:peek(15)
     local waveName = ""
     for i = 1, 7 do 
       waveName = waveName .. string.char(sysexBlock:peek(i+15))
     end
-    waveTableNames[sysexBlock:peek(15)] = waveName
+    waveTableNames[slot] = waveName
+    acknowledgeStartupWaveName(slot)
   end
 end
 
@@ -1701,13 +1723,69 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
   end
 end
 
--- request Peak wavetable names and global settings on preset load
+-- I only want to send some MIDI messages after a control knob is released (to avoid sending a stream of sysEx messages when turning a knob)
+-- activeTouchedControlId holds which of the control knobs was touched (HT @oldgearguy)
+local activeTouchedControlId   = -1
+
+-- helper function to find match between touched control and target list of controls
+local function get_key_for_value(t, value) 
+   if (t ~= nil) then
+      for k,v in pairs(t) do
+         if v==value then return k end
+      end
+   end
+   return nil
+end
+
+-- sysEx header strings for touch release logic
+local SEND_PATCH_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00} 
+local SEND_SETTINGS_HEADER = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00}
+
+-- control ids for touch release logic
+local CTRL_CLOCK = 318
+local CTRL_TRANSPOSE = 356
+local CTRL_MASTER_TUNE = 357
+local CTRL_VELOCITY_SHAPE = 358
+local CTRL_RELEASE = {CTRL_CLOCK,CTRL_TRANSPOSE,CTRL_MASTER_TUNE,CTRL_VELOCITY_SHAPE} 
+
+function events.onPotTouchChange(potId, controlId, touched)
+  local idx = get_key_for_value(CTRL_RELEASE,controlId)
+  if (idx == nil) then return end
+  if (touched == true) and (activeTouchedControlId ~= controlId) then 
+    activeTouchedControlId = controlId 
+    return 
+  end
+  if (touched == false) and (activeTouchedControlId == controlId) then
+    local midiValue = controls.get(controlId):getValue("value"):getMessage():getValue()
+    if controlId == CTRL_CLOCK then -- clock
+      sysExPatch[237] = math.floor(midiValue/2)
+      sysExPatch[238] = 64*(midiValue%2)
+      midi.sendSysex (port, concat(SEND_PATCH_HEADER,sysExPatch)) -- sends the updated patch to the edit buffer of the Peak
+    elseif controlId == CTRL_TRANSPOSE then
+      sysExSettings[16] = midiValue
+      midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings))  -- sends the updated settings to the Peak
+    elseif controlId == CTRL_MASTER_TUNE then
+      sysExSettings[15] = midiValue
+      midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings)) 
+    elseif controlId == CTRL_VELOCITY_SHAPE then
+      sysExSettings[14] = midiValue
+      midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings)) 
+    end
+  end
+end
+
+-- restore cached patch names and change to performance page when preset loads
 function preset.onLoad()
-  loadNameBank()       -- restore cached patch names first
+  loadNameBank()       
   pages.display(12)
 end
 
+-- request Peak wavetable names and global settings after preset is loaded
 function preset.onReady()
+  cancelStartupWaveTimeout()
+  startupSettingsRequested = false
+  resetStartupWavePending()
+  startupWaveHandshakeActive = true
   getAllWaveNames(nil,1)
-  schedule.after(1000,getSettings,nil,1)
+  startupWaveTimeoutHandle = schedule.after(STARTUP_WAVE_TIMEOUT_MS, requestStartupSettingsOnce)
 end
