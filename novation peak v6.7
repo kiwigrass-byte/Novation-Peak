@@ -1,5 +1,5 @@
 -- Novation PEAK preset v6.7
--- 09/26/26
+-- 09/27/26
 
 local authorDate = "Kiwigrass"
 info.setText(authorDate)
@@ -116,11 +116,6 @@ function displayPatch (valueObject, value)
   local patchName = nameBank[bankNum][value]
   controls.get(CTRL_PATCH_NUMBER):setName(patchName)
   return (bankTxt[bankNum].." "..string.format("%03d",value))
-end
-
-function displayChar (valueObject, value) -- borrowed from pro 800 preset to display patch names
-  -- The full name is assembled and pushed to the info bar inside assignParam().
-  return string.char(value)
 end
 
 function displayWaveTable(valueObject, value)
