@@ -126,6 +126,10 @@ function formatPercent(valueObject, value)
     return string.format("%d %%", value)
 end
 
+function formatPercent2(valueObject, value)
+    return string.format("%.0f %%", 100*value/127)
+end
+
 function formatCents(valueObject, value)
     return string.format("%+d ct", value)
 end
