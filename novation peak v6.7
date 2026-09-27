@@ -78,7 +78,7 @@ local function concat(t1, t2)
   return t
 end
 
--- display formatter functions ---------------------------------------------------------------------
+------------------------------ value formatter functions -------------------------------------
 -- Wavetable name lookup 
 local waveTableNames = {
   [4]="BS Sine",   [5]="Random",   [6]="Zing",      [7]="Tubey",    [8]="Octaves",
@@ -97,16 +97,64 @@ local waveTableNames = {
   [69]="User 6",   [70]="User 7",  [71]="User 8",   [72]="User 9",  [73]="User 10"
 }
 
-local notes = {"C  %d","C# %d","D  %d","D# %d","E  %d","F  %d","F# %d","G  %d","G# %d","A  %d","A# %d","B  %d"}
-
-function displayBpm(valueObject,value)
-   return(math.floor(value) .. " bpm")
+function formatWaveTable(valueObject, value)
+  return waveTableNames[value] or string.format("Wave %d", value)
 end
 
-function displayNotes (valueObject, value)
+local notes = {"C  %d","C# %d","D  %d","D# %d","E  %d","F  %d","F# %d","G  %d","G# %d","A  %d","A# %d","B  %d"}
+
+function formatNotes (valueObject, value)
   if value > 0 then return (string.format(notes[math.fmod(value-1, 12)+1], (value// 12)-2)) 
   else return("X")
   end
+end
+
+function formatBpm(valueObject,value)
+   return string.format("%d bpm", value)
+end
+
+function formatSemiTones(valueObject, value)
+  if value > 0 then return string.format("%.1f st", value*12/127)
+  else return string.format("%.1f st", value*12/128) end
+end
+
+function formatSemiTones2(valueObject,value)
+  return string.format ("%d semitones", value)
+end
+
+function formatPercent(valueObject, value)
+    return string.format("%d %%", value)
+end
+
+function formatCents(valueObject, value)
+    return string.format("%+d ct", value)
+end
+
+function formatPhase(valueObject,value) 
+  return string.format ("%d deg", (value-1)*3)
+end
+
+function formatPan(valueObject, value)
+    if value == 0 then
+        return "Centre"
+    elseif value < 0 then
+        return string.format("L %d", -value)
+    end
+    return string.format("R %d", value)
+end
+
+-- Set Name functions ---------
+-- AHDSR value-in-name suffix
+-- Appends the live value of an AHDSR envelope's primary stage to its tile
+-- title, e.g. "AMP ATTACK" -> "AMP ATTACK 101". The base (unsuffixed) name is
+-- captured the first time each control is seen so repeat updates don't keep
+-- stacking suffixes onto an already-modified name.
+local ahdsrBaseNames = setmetatable({}, {__mode = "v"})
+function ahdsrValueName(valueObject, value)
+  local ctrl = valueObject:getControl()
+  local id = ctrl:getId()
+  if not ahdsrBaseNames[id] then ahdsrBaseNames[id] = ctrl:getName() end
+  ctrl:setName(ahdsrBaseNames[id] .. " " .. string.format("%d", value))
 end
 
 local CTRL_PATCH_NUMBER = 423
@@ -116,48 +164,6 @@ function displayPatch (valueObject, value)
   local patchName = nameBank[bankNum][value]
   controls.get(CTRL_PATCH_NUMBER):setName(patchName)
   return (bankTxt[bankNum].." "..string.format("%03d",value))
-end
-
-function displayWaveTable(valueObject, value)
-  return waveTableNames[value] or string.format("Wave %d", value)
-end
-
--- ── AHDSR value-in-name suffix ───────────────────────────────────────────────
--- Appends the live value of an AHDSR envelope's primary stage to its tile
--- title, e.g. "AMP ATTACK" -> "AMP ATTACK 101". The base (unsuffixed) name is
--- captured the first time each control is seen so repeat updates don't keep
--- stacking suffixes onto an already-modified name.
-
-local ahdsrBaseNames = setmetatable({}, {__mode = "v"})
-
-function ahdsrValueName(valueObject, value)
-  local ctrl = valueObject:getControl()
-  --if not ctrl then return end
-  local id = ctrl:getId()
-  if not ahdsrBaseNames[id] then ahdsrBaseNames[id] = ctrl:getName() end
-  ctrl:setName(ahdsrBaseNames[id] .. " " .. string.format("%d", value))
-  -- print ("ctl = "..id..", base Name = "..ahdsrBaseNames[id])
-end
-
-function semiTones(valueObject, value)
-  if value > 0 then return string.format("%.1f st", value*12/127)
-  else return string.format("%.1f st", value*12/128) end
-end
-
-function percent(valueObject,value) ---- 
-  return string.format ("%d %%", value)
-end
-
-function cent(valueObject,value) ---- 
-  return string.format ("%d cents", value)
-end
-
-function st(valueObject,value) ---- 
-  return string.format ("%d semitones", value)
-end
-
-function convertToPhase(valueObject,value) ---- 
-  return string.format ("%d deg", (value-1)*3)
 end
 
 -- ============================================================
