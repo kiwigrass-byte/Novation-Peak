@@ -702,6 +702,7 @@ for i = 1, 16 do modAmountBase[i] = 64 end
 local macroLfoState = {
   isRunning = false,
   phase = 0.5,
+  shPhase = 0.5,   -- independent phase accumulator for S&H sampling
 
   periodMs = 4000, -- one complete cycle
   stepMs = 50,     -- timer interval
@@ -983,6 +984,28 @@ local function currentMacroLfoValue()
   return triangleMacroValue(macroLfoState.phase)
 end
 
+-- ---------------- S&H sampling-rate scaling ----------------
+-- At short periods, sampling once per cycle already feels responsive.
+-- At long periods, sampling once per cycle feels static, so we sample
+-- more often (an effective "sub-cycle" rate) while still applying the
+-- normal glide/hold shape per sample.
+local SH_RATE_MIN_PERIOD_MS = 2000   -- <= this: multiplier = 1 (sample once per cycle)
+local SH_RATE_MAX_PERIOD_MS = 20000  -- >= this: multiplier = SH_RATE_MAX_MULT
+local SH_RATE_MAX_MULT = 5
+
+local function shSampleMultiplier(periodMs)
+  if periodMs <= SH_RATE_MIN_PERIOD_MS then
+    return 1.0
+  elseif periodMs >= SH_RATE_MAX_PERIOD_MS then
+    return SH_RATE_MAX_MULT
+  end
+
+  local t = (periodMs - SH_RATE_MIN_PERIOD_MS)
+          / (SH_RATE_MAX_PERIOD_MS - SH_RATE_MIN_PERIOD_MS)
+
+  return 1.0 + t * (SH_RATE_MAX_MULT - 1.0)
+end
+
 -- ---------------- Correlated S&H with slew ----------------
 
 -- Select a nearby random target.
@@ -1002,6 +1025,11 @@ local function chooseNextSampleAndHoldTarget()
   macroLfoState.shToValue = reflect01(newTarget)
 end
 
+-- a smooth Bezier curve used to interpolate between S&H points
+local function smoothBezier(t)
+  return t * t * (3 - 2 * t)
+end
+
 local function updateSampleAndHoldGlide()
   local glideFraction = MACRO_LFO_SH_GLIDE_FRACTION
 
@@ -1011,13 +1039,14 @@ local function updateSampleAndHoldGlide()
   end
 
   -- Once the glide portion is complete, hold the target.
-  if macroLfoState.phase >= glideFraction then
+  if macroLfoState.shPhase >= glideFraction then
     macroLfoState.heldRandom = macroLfoState.shToValue
     return
   end
 
-  -- Interpolate from the previous value to the new target.
-  local glidePosition = macroLfoState.phase / glideFraction
+  -- Interpolate from the previous value to the new target using a Bezier curve instead of linear.
+  local glidePosition = clamp01(macroLfoState.shPhase / glideFraction)
+  glidePosition = smoothBezier(glidePosition)
 
   macroLfoState.heldRandom =
     macroLfoState.shFromValue
@@ -1092,7 +1121,6 @@ local function macroLfoTick()
   if not macroLfoState.isRunning then
     return
   end
-
   -- Hold the LFO while COMPARE_IT is showing snapshot A.
   if comparingActive then
     return
@@ -1102,16 +1130,26 @@ local function macroLfoTick()
     macroLfoState.phase
     + macroLfoState.stepMs / macroLfoState.periodMs
 
-  local wrapped = false
-
   if macroLfoState.phase >= 1 then
     macroLfoState.phase = macroLfoState.phase - 1
-    wrapped = true
   end
 
   if macroLfoState.waveform == MACRO_LFO_SH then
     -- At the start of each cycle, choose a nearby new target.
-    if wrapped then
+    local shPeriodMs =
+      macroLfoState.periodMs / shSampleMultiplier(macroLfoState.periodMs)
+
+    macroLfoState.shPhase =
+      macroLfoState.shPhase
+      + macroLfoState.stepMs / shPeriodMs
+
+    local shWrapped = false
+    if macroLfoState.shPhase >= 1 then
+      macroLfoState.shPhase = macroLfoState.shPhase - 1
+      shWrapped = true
+    end
+
+    if shWrapped then
       chooseNextSampleAndHoldTarget()
     end
 
@@ -1151,12 +1189,14 @@ function startMacroLfo(mode)
     return
   end
 
+--[[
   -- The patch scanner and LFO share the timer. Do not start the LFO while
   -- a patch scan is active.
   if patchScanState.isRunning then
     print("Cannot start macro LFO while patch scanner is running")
     return
   end
+]]
 
   -- Capture the currently stored, non-modulated values before the first
   -- temporary LFO modulation is sent.
@@ -1260,6 +1300,7 @@ function macroLfoWaveChange(valueObject, value)
     macroLfoState.heldRandom = normalized
     macroLfoState.shFromValue = normalized
     macroLfoState.shToValue = normalized
+    macroLfoState.shPhase = 0.5
   end
 
   macroLfoState.waveform = value
@@ -1527,10 +1568,10 @@ function assignParam()
   -- Establish new A/B baseline for this patch.
   captureSnapshotA()
 
-  -- Update info bar with patch name
+  -- Update info bar with patch name (bytes 2–17 of sysExPatch)
   local patchName = ""
   for j = 0, 15 do
-    local ch = parameterMap.get(deviceId, PT_VIRTUAL, 10001+j)
+    local ch = sysExPatch[2 + j]
     if ch and ch ~= 0 then patchName = patchName .. string.char(ch) end
   end
   if #patchName > 0 then info.setText(string.sub(patchName, 1, 20)) end
