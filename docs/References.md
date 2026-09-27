@@ -139,6 +139,14 @@ creates a triangular probability distribution, making smaller movements more lik
 
 **Result:** S&H feels responsive across the full rate range (300 ms–20 s) without changing the perceived glide shape or hold duration relative to each sampled target.
 
+## Macro LFO S&H: Smooth Random Interpolation
+The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal.
+With:
+local MACRO_LFO_SH_MAX_STEP = 0.5
+local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
+
+The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.
+
 ### Applied in this preset
 - Patch scanning uses `schedule.every()` with a 200 ms interval.
 - `scanHandle` is retained so the repeating task can be cancelled.
@@ -163,16 +171,7 @@ If script work holds the lock too long, paint can miss frames (around 20 ms time
 - For timer-driven LFO updates, prefer `parameterMap.modulate(...)` over `set`/`updateValue`.
 - `modulate` sends live MIDI without writing map state or triggering callbacks/formatters, reducing lock-hold pressure and improving UI responsiveness.
 - For large patch parsing, use `parameterMap.transaction(...)` to coalesce map activity and avoid per-parameter callback storms during ingest.
-
-## Macro LFO S&H: Smooth Random Interpolation
-The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal.
-With:
-```lua
-local MACRO_LFO_SH_MAX_STEP = 0.5
-local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
-
-The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.
-
+  
 ## Preset UX conventions in this repo
 
 - Patch scroll and patch select are separate controls.
