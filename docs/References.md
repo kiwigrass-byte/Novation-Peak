@@ -112,7 +112,8 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - The earlier versions of the preset had several params in assignParams() that were for the Summit and so there was no Peak parameter. This generated 16537 messages.  It was useful way to identify unused parameters that could be removed.  
 
 ### 10) macro-LFO
-- In macro S&H target selection, hard clamping candidate values to `0..1` caused edge stickiness near 0%/100% because outward moves collapsed to the boundary.
+- In macro S&H target selection, hard clamping candidate values to `0..1` caused edge stickiness near 0%/100% because outward moves collapsed to the boundary. MACRO_LFO_SH_MAX_STEP limits how far the next target can move from the current value. The use of: math.random() + math.random() - 1
+creates a triangular probability distribution, making smaller movements more likely than large ones.
 - Replaced clamp-based edge handling with reflected boundaries so overshoot is mirrored back into range, preserving motion while keeping normalized targets.
 - Result: less boundary dwell, smoother perceived movement near the macro range limits.
 - Triangle mode changes continuously on every LFO tick, while S&H holds each sampled target for most of its cycle.
@@ -169,7 +170,9 @@ With:
 ```lua
 local MACRO_LFO_SH_MAX_STEP = 0.5
 local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
- 
+
+The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.
+
 ## Preset UX conventions in this repo
 
 - Patch scroll and patch select are separate controls.
