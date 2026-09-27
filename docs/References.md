@@ -122,9 +122,14 @@ creates a triangular probability distribution, making smaller movements more lik
 - So the S&H still randomly picks targets and still uses the same glide duration, but now the path between them is curved instead of straight. 
 - The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal.
 With: local MACRO_LFO_SH_MAX_STEP = 0.5, local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
-- The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.
-### 11) Macro S&H sampling-rate scaling for longer LFO periods
+- The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.This produces an eased transition:
+- - Movement begins slowly.
+-- The rate increases toward the middle of the transition.
+-- Movement slows as it approaches the next random target.
+-- The output reaches each target with zero velocity.
+-- The next target is selected immediately, allowing continuous movement.
 
+### 11) Macro S&H sampling-rate scaling for longer LFO periods
 **Problem:** The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static and unresponsive. At short periods (300 ms), sampling once per cycle is already fast enough.
 
 **Solution:** Scale the S&H sampling rate (sub-cycle frequency) inversely with the LFO period using a piecewise-linear multiplier function:
