@@ -162,7 +162,14 @@ If script work holds the lock too long, paint can miss frames (around 20 ms time
 - For timer-driven LFO updates, prefer `parameterMap.modulate(...)` over `set`/`updateValue`.
 - `modulate` sends live MIDI without writing map state or triggering callbacks/formatters, reducing lock-hold pressure and improving UI responsiveness.
 - For large patch parsing, use `parameterMap.transaction(...)` to coalesce map activity and avoid per-parameter callback storms during ingest.
-  
+
+## Macro LFO S&H: Smooth Random Interpolation
+The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal.
+With:
+```lua
+local MACRO_LFO_SH_MAX_STEP = 0.5
+local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
+ 
 ## Preset UX conventions in this repo
 
 - Patch scroll and patch select are separate controls.
