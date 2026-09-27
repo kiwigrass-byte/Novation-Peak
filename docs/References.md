@@ -120,7 +120,9 @@ creates a triangular probability distribution, making smaller movements more lik
 - As a result, S&H may require a faster rate to feel continuously active; slower rates intentionally produce longer held movements. See below.
 - The smoothBezier function (cubic ease-in/ease-out: t² × (3 - 2t)) curves the progression, so the value accelerates into the movement and decelerates out of it — more organic/musical than a flat linear ramp.
 - So the S&H still randomly picks targets and still uses the same glide duration, but now the path between them is curved instead of straight. 
-
+- The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal.
+With: local MACRO_LFO_SH_MAX_STEP = 0.5, local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
+- The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.
 ### 11) Macro S&H sampling-rate scaling for longer LFO periods
 
 **Problem:** The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static and unresponsive. At short periods (300 ms), sampling once per cycle is already fast enough.
@@ -140,12 +142,7 @@ creates a triangular probability distribution, making smaller movements more lik
 **Result:** S&H feels responsive across the full rate range (300 ms–20 s) without changing the perceived glide shape or hold duration relative to each sampled target.
 
 ## Macro LFO S&H: Smooth Random Interpolation
-The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal.
-With:
-local MACRO_LFO_SH_MAX_STEP = 0.5
-local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
 
-The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.
 
 ### Applied in this preset
 - Patch scanning uses `schedule.every()` with a 200 ms interval.
