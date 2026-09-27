@@ -4,7 +4,7 @@ This file captures external documentation and project conventions we rely on whe
 
 ## Official documentation
 
-- Electra One developer docs (fw 5.0): https://docs.electra.one/5.0/developers/
+- Electra One developer docs (fw 5.0):https://docs.electra.one/5.0/developers/architecture.html
 - Architecture / value-change flow: https://docs.electra.one/5.0/developers/architecture.html#what-happens-when-a-value-changes
 
 ## Key API features
