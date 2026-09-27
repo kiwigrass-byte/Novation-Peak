@@ -123,9 +123,9 @@ After bulk patch apply settles, then run derived-state/UI sync:
 **Problem:** The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static and unresponsive. At short periods (300 ms), sampling once per cycle is already fast enough.
 
 **Solution:** Scale the S&H sampling rate (sub-cycle frequency) inversely with the LFO period using a piecewise-linear multiplier function:
-- Periods ≤ 5 seconds: multiplier = 1.0 (sample once per cycle, baseline behavior)
+- Periods ≤ 2 seconds: multiplier = 1.0 (sample once per cycle, baseline behavior)
 - Periods ≥ 20 seconds: multiplier = 3.0 (sample three times per cycle)
-- Between 5–20 seconds: linear interpolation (12.5sec: sample twice per cycle)
+- Between 2–20 seconds: linear interpolation (9sec: sample twice per cycle)
 
 **Implementation:**
 - Add an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`.
