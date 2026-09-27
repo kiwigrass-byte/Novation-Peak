@@ -118,6 +118,24 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - Triangle mode changes continuously on every LFO tick, while S&H holds each sampled target for most of its cycle.
 - As a result, S&H may require a faster rate to feel continuously active; slower rates intentionally produce longer held movements.
 
+### 11) Macro S&H sampling-rate scaling for longer LFO periods
+
+**Problem:** The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static and unresponsive. At short periods (300 ms), sampling once per cycle is already fast enough.
+
+**Solution:** Scale the S&H sampling rate (sub-cycle frequency) inversely with the LFO period using a piecewise-linear multiplier function:
+- Periods ≤ 5 seconds: multiplier = 1.0 (sample once per cycle, baseline behavior)
+- Periods ≥ 20 seconds: multiplier = 2.0 (sample twice per cycle)
+- Between 5–20 seconds: linear interpolation
+
+**Implementation:**
+- Add an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`.
+- `shPhase` advances at a scaled rate: `stepMs / (periodMs / multiplier)`.
+- When `shPhase` wraps, trigger a new S&H target (`chooseNextSampleAndHoldTarget`).
+- The glide/hold timing (`updateSampleAndHoldGlide`) uses `shPhase` instead of the triangle's `phase`, so glide behavior is relative to the sub-cycle, not the full cycle.
+- Triangle mode is unaffected; it continues to update on every tick at the base period.
+
+**Result:** S&H feels responsive across the full rate range (300 ms–20 s) without changing the perceived glide shape or hold duration relative to each sampled target.
+
 ### Applied in this preset
 - Patch scanning uses `schedule.every()` with a 200 ms interval.
 - `scanHandle` is retained so the repeating task can be cancelled.
