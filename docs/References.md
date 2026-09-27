@@ -132,13 +132,13 @@ With: local MACRO_LFO_SH_MAX_STEP = 0.5, local MACRO_LFO_SH_GLIDE_FRACTION = 1.0
 ### 11) Macro S&H sampling-rate scaling for longer LFO periods
 **Problem:** The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static and unresponsive. At short periods (300 ms), sampling once per cycle is already fast enough.
 
-**Solution:** At short LFO periods, a single random sample per cycle feels responsive. At long periods, it feels static, so the sampling rate scales with period duration using a piecewise-linear multiplier:
+**Solution:** Scale the S&H sampling rate (samples per cycle) with LFO period to maintain constant perceived randomness:
 
-- Periods ≤ 2 seconds: 1 sample per cycle
-- Periods ≥ 20 seconds: 4 samples per cycle  
-- Between 2–20 seconds: linear interpolation
+- ≤ 2 sec: 1 sample/cycle
+- ≥ 20 sec: 4 samples/cycle
+- Linear interpolation between
 
-This keeps the perceived randomness rate more similar across all LFO speeds. For example, a 10-second period samples ~2.33 times per cycle.
+For example, a 10-second LFO period samples ~2.33 times per cycle.
 
 **Implementation:**
 - Add an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`.
