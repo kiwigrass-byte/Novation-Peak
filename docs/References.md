@@ -116,7 +116,9 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - Replaced clamp-based edge handling with reflected boundaries so overshoot is mirrored back into range, preserving motion while keeping normalized targets.
 - Result: less boundary dwell, smoother perceived movement near the macro range limits.
 - Triangle mode changes continuously on every LFO tick, while S&H holds each sampled target for most of its cycle.
-- As a result, S&H may require a faster rate to feel continuously active; slower rates intentionally produce longer held movements.
+- As a result, S&H may require a faster rate to feel continuously active; slower rates intentionally produce longer held movements. See below.
+- The smoothBezier function (cubic ease-in/ease-out: t² × (3 - 2t)) curves the progression, so the value accelerates into the movement and decelerates out of it — more organic/musical than a flat linear ramp.
+- So the S&H still randomly picks targets and still uses the same glide duration, but now the path between them is curved instead of straight. 
 
 ### 11) Macro S&H sampling-rate scaling for longer LFO periods
 
@@ -124,8 +126,8 @@ After bulk patch apply settles, then run derived-state/UI sync:
 
 **Solution:** Scale the S&H sampling rate (sub-cycle frequency) inversely with the LFO period using a piecewise-linear multiplier function:
 - Periods ≤ 2 seconds: multiplier = 1.0 (sample once per cycle, baseline behavior)
-- Periods ≥ 20 seconds: multiplier = 3.0 (sample three times per cycle)
-- Between 2–20 seconds: linear interpolation (9sec: sample twice per cycle)
+- Periods ≥ 20 seconds: multiplier = 5.0 (sample five times per cycle)
+- Between 2–20 seconds: linear interpolation (9sec: sample three times per cycle)
 
 **Implementation:**
 - Add an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`.
