@@ -171,6 +171,14 @@ If script work holds the lock too long, paint can miss frames (around 20 ms time
   2. explicit patch request SysEx
 - This is intentional and preferred over automatic debounce behavior.
 
+## To Do:
+Explore LFO options:
+- Randomizing the curve itself — not just easing between fixed targets with a fixed curve shape, but generating random Bézier control points each cycle to vary the curvature (sometimes more snappy, sometimes more languid).
+- Continuous target cycling — instead of holding after the glide, immediately begin moving to the next random target, so the LFO is always in motion.
+- Multi-point paths — instead of moving between two points per cycle, define a sequence of random waypoints and interpolate smoothly through all of them.
+- Waveform mode integration — adding it as a third LFO waveform option alongside Triangle and S&H, with UI controls for curve intensity or randomness parameters.
+- We can prototype it, test it against the Peak's modulation depth ranges, and document the approach in References.md when we land on something that feels right.
+
 ## Maintenance note
 
 When updating this file, keep examples concrete and tied to observed behavior in MIDI monitor/output logs.
