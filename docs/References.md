@@ -124,8 +124,8 @@ After bulk patch apply settles, then run derived-state/UI sync:
 
 **Solution:** Scale the S&H sampling rate (sub-cycle frequency) inversely with the LFO period using a piecewise-linear multiplier function:
 - Periods ≤ 5 seconds: multiplier = 1.0 (sample once per cycle, baseline behavior)
-- Periods ≥ 20 seconds: multiplier = 2.0 (sample twice per cycle)
-- Between 5–20 seconds: linear interpolation
+- Periods ≥ 20 seconds: multiplier = 3.0 (sample three times per cycle)
+- Between 5–20 seconds: linear interpolation (12.5sec: sample twice per cycle)
 
 **Implementation:**
 - Add an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`.
