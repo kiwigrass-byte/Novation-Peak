@@ -924,11 +924,12 @@ local MACRO_LFO_SH = 1
 -- S&H behavior
 -- Maximum movement toward a new random target per cycle,
 -- expressed as a fraction of the active macro range.
-local MACRO_LFO_SH_MAX_STEP = 0.35
+local MACRO_LFO_SH_MAX_STEP = 0.5
 
 -- Portion of each S&H cycle used to glide toward the
 -- new target. The remainder of the cycle holds the target.
-local MACRO_LFO_SH_GLIDE_FRACTION = 0.15
+-- = 1 -> continuous movement (0 hold time)
+local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
 
 -- ---------------- LFO utility functions ----------------
 
@@ -1016,10 +1017,8 @@ local function shSampleMultiplier(periodMs)
   return 1.0 + t * (SH_RATE_MAX_MULT - 1.0)
 end
 
--- ---------------- Correlated S&H with slew ----------------
-
+-- ---------------- correlated S&H generating random Bézier-like modulation ----------------
 -- Select a nearby random target.
---
 -- math.random() + math.random() - 1 creates a triangular
 -- distribution centered around zero. Small movements are
 -- more likely than large movements.
@@ -1198,15 +1197,6 @@ function startMacroLfo(mode)
     applyCurrentMacroLfoValue()
     return
   end
-
---[[
-  -- The patch scanner and LFO share the timer. Do not start the LFO while
-  -- a patch scan is active.
-  if patchScanState.isRunning then
-    print("Cannot start macro LFO while patch scanner is running")
-    return
-  end
-]]
 
   -- Capture the currently stored, non-modulated values before the first
   -- temporary LFO modulation is sent.
