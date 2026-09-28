@@ -1091,12 +1091,13 @@ end
 --
 local SCOPE_WIDTH = 314
 local SCOPE_HEIGHT = 140
+local CTRL_LFO_SCOPE = 328
 
 -- Shortcut for graphics object
 local g = graphics
 
 -- The Scope control
-local scopeControl = controls.get(328)
+local scopeControl = controls.get(CTRL_LFO_SCOPE)
 
 -- Scope buffer (one sample per pixel column)
 local scope = {
