@@ -922,7 +922,8 @@ local MACRO_LFO_BIPOLAR = 2
 
 -- Macro LFO waveforms
 local MACRO_LFO_TRIANGLE = 0
-local MACRO_LFO_SH = 1
+local MACRO_LFO_SINE = 1
+local MACRO_LFO_SH = 2
 
 -- S&H behavior
 -- Maximum movement toward a new random target per cycle,
@@ -962,38 +963,35 @@ end
 
 -- Triangle waveform:
 -- phase 0.0   = minimum, phase 0.5   = maximum, phase 1.0   = minimum again
-local function triangleMacroValue(phase)
+local function triangleMacroValue()
   local triangle
-
-  if phase < 0.5 then
-    triangle = phase * 2
+  if macroLfo.phase < 0.5 then
+    triangle = macroLfo.phase * 2
   else
-    triangle = 2 - phase * 2
+    triangle = 2 - macroLfo.phase * 2
   end
-
-  local value =
-    macroLfo.minValue
-    + triangle * (macroLfo.maxValue - macroLfo.minValue)
-
+  local value =  ( macroLfo.minValue  + triangle * (macroLfo.maxValue - macroLfo.minValue) ) * macroLfo.amplitude
   return math.floor(value + 0.5)
 end
 
 -- Return the current S&H value mapped into the active macro range.
 local function sampleAndHoldMacroValue()
-  local value =
-    macroLfo.minValue
-    + macroLfo.heldRandom
-      * (macroLfo.maxValue - macroLfo.minValue)
-
+  local value = ( macroLfo.minValue  + macroLfo.heldRandom  * (macroLfo.maxValue - macroLfo.minValue) ) * macroLfo.amplitude
   return math.floor(value + 0.5)
+end
+
+function sineMacroValue()
+    local value = math.sin(macroLfo.phase * 2 * math.pi) * macroLfo.amplitude
+    return math.floor(value + 0.5)
 end
 
 local function currentMacroLfoValue()
   if macroLfo.waveform == MACRO_LFO_SH then
     return sampleAndHoldMacroValue()
+  elseif macroLfo.waveform == MACRO_LFO_SINE then
+    return sineMacroValue()
   end
-
-  return triangleMacroValue(macroLfo.phase)
+  return triangleMacroValue()
 end
 
 -- ---------------- S&H sampling-rate scaling ----------------
@@ -1320,6 +1318,8 @@ end
 function displayMacroLfoWave(valueObject, value)
   if value == MACRO_LFO_SH then
     return "S&H"
+  elseif value == MACRO_LFO_SINE then
+    return "Sine"
   end
 
   return "Triangle"
@@ -1337,7 +1337,7 @@ function macroLfoWaveChange(valueObject, value)
   if value == MACRO_LFO_SH
       and macroLfo.waveform ~= MACRO_LFO_SH then
 
-    local currentValue = triangleMacroValue(macroLfo.phase)
+    local currentValue = triangleMacroValue()
     local range = macroLfo.maxValue - macroLfo.minValue
     local normalized = 1.0
 
