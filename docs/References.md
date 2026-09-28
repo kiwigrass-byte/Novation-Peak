@@ -120,8 +120,7 @@ creates a triangular probability distribution, making smaller movements more lik
 - As a result, S&H may require a faster rate to feel continuously active; slower rates intentionally produce longer held movements. See below.
 - The smoothBezier function (cubic ease-in/ease-out: t² × (3 - 2t)) curves the progression, so the value accelerates into the movement and decelerates out of it — more organic/musical than a flat linear ramp.
 - So the S&H still randomly picks targets and still uses the same glide duration, but now the path between them is curved instead of straight. 
-- The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal.
-With: local MACRO_LFO_SH_MAX_STEP = 0.5, local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
+- The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal. With: `local MACRO_LFO_SH_MAX_STEP = 1`, `local MACRO_LFO_SH_GLIDE_FRACTION = 1.00`
 - The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.This produces an eased transition:
 - Movement begins slowly.
 - The rate increases toward the middle of the transition.
