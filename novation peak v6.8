@@ -1003,7 +1003,7 @@ end
 -- normal glide/hold shape per sample.
 local SH_RATE_MIN_PERIOD_MS = 2000   -- <= this: multiplier = 1 (sample once per cycle)
 local SH_RATE_MAX_PERIOD_MS = 20000  -- >= this: multiplier = SH_RATE_MAX_MULT
-local SH_RATE_MAX_MULT = 5 -- eg., 20sec -> sample every 4 sec; 2sec -> sample every 2sec, 1sec -> sample every 1sec 
+local SH_RATE_MAX_MULT = 4 -- eg., 20sec -> sample every 5 sec; 2sec -> sample every 2sec, 1sec -> sample every 1sec 
 
 local function shSampleMultiplier(periodMs)
   if periodMs <= SH_RATE_MIN_PERIOD_MS then
