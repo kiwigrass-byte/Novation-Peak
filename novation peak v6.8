@@ -416,6 +416,7 @@ function glide(valueObject, value)
 end
 
 ---------------------------- MIDI send functions ---------------------------------------
+--
 function sendSimpleNRPN(nrpn, value)
 --  print(string.format("Sending NRPN %d = %d", nrpn, value))
   midi.sendControlChange (port , channel , 99, math.floor(nrpn/128))
@@ -527,7 +528,6 @@ end
 --   persist(table)
 --   recall(table)
 -- We persist a tagged flat map and rebuild nameBank on load.
-
 -- a tag to keep track of versions of patch-banks on the Peak 
 local PERSIST_TAG = "peakPatchNamesV1"
 
@@ -620,6 +620,7 @@ local function flushNameBankIfDirty()
 end
 
 ------------------ Schedule patch scanning to extract patch name ------------------------
+--
 local patchScanState = {
   bank = 1,           -- current bank (1-4)
   patch = 0,          -- current patch (0-127)
@@ -681,6 +682,7 @@ function startPatchScanner(valueObject, value)
 end
 
 -- ---------------- Mod amount macro bipolar scaling ----------------
+--
 local PARAM_MACRO_KNOB = 10038
 local MACRO_MAX = 16383
 local MACRO_CENTER = 8192
@@ -743,7 +745,6 @@ local macroLfoState = {
 -- modulation is applied. It is captured when the LFO starts and refreshed
 -- whenever the normal macro state is deliberately rewritten.
 -- ---------------------------------------------------------------------------
-
 local lfoMapBaseline = {}
 local lfoBaselineValid = false
 
@@ -894,6 +895,7 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
 end
 
 -- ---------------- COMPARE_IT / macro sync ----------------
+--
 local macroBaseSnapshotA = nil
 local macroBaseSnapshotB = nil
 local compareApplying = false
@@ -932,7 +934,7 @@ local MACRO_LFO_SH_MAX_STEP = 0.5
 local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
 
 -- ---------------- LFO utility functions ----------------
-
+--
 local function clamp01(value)
   if value < 0 then
     return 0
@@ -1064,7 +1066,7 @@ local function updateSampleAndHoldGlide()
 end
 
 -- ---------------- Apply current LFO value ----------------
-
+--
 local function applyCurrentMacroLfoValue()
   if comparingActive then
     return
