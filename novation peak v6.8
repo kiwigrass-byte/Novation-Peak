@@ -1087,7 +1087,7 @@ local function applyCurrentMacroLfoValue()
   applyMacroToAll()
 end
 
--- LFO Scope Global variables
+-------------- LFO Scope Global variables ----------------------------------
 --
 local SCOPE_WIDTH = 314
 local SCOPE_HEIGHT = 140
@@ -1103,8 +1103,23 @@ local scope = {
     y = {},
 }
 
--- ---------------- Start/stop/tick ----------------
+local scopeRepaintDiv = 3   -- 2 => repaint every 100ms, 3 => 150ms
+local scopeRepaintCount = 0
 
+-- map current macro value into normalized [-1, 1]
+local function macroValueToNorm(v)
+  local minV = macroLfoState.minValue
+  local maxV = macroLfoState.maxValue
+  local range = maxV - minV
+  if range <= 0 then return 0 end
+
+  local u = (v - minV) / range   -- 0..1
+  if u < 0 then u = 0 elseif u > 1 then u = 1 end
+  return (u * 2) - 1             -- -1..1
+end
+
+-- ---------------- Start/stop/tick ----------------
+--
 local function stopMacroLfo()
   macroLfoState.isRunning = false
 
@@ -1242,16 +1257,24 @@ function timer.onTick()
   if macroLfoState.isRunning then
     macroLfoTick()
   end
-  -- Scroll left and append newest sample
+
   for i = 1, SCOPE_WIDTH - 1 do
-      scope.y[i] = scope.y[i + 1]
+    scope.y[i] = scope.y[i + 1]
   end
-  scope.y[SCOPE_WIDTH] = triangleMacroValue(phase)  -- draw what we actually output
-  scopeControl:repaint()
+
+  -- scope: draw what is actually output by current waveform/range
+  local v = currentMacroLfoValue()
+  scope.y[SCOPE_WIDTH] = macroValueToNorm(v)
+
+  scopeRepaintCount = scopeRepaintCount + 1
+  if scopeRepaintCount >= scopeRepaintDiv then
+    scopeRepaintCount = 0
+    scopeControl:repaint()
+  end
 end
 
 -- ---------------- Macro LFO rate control ----------------
-
+--
 local LFO_RATE_MIN_MS = 300
 local LFO_RATE_MAX_MS = 20000
 
@@ -1287,7 +1310,7 @@ function lfoRateChange(valueObject, value)
 end
 
 -- ---------------- Macro LFO waveform control ----------------
-
+--
 function displayMacroLfoWave(valueObject, value)
   if value == MACRO_LFO_SH then
     return "S&H"
@@ -1338,7 +1361,7 @@ function macroLfoWaveChange(valueObject, value)
   )
 end
 
--- A callback to draw the XY pad graphics
+-------------- A callback to draw the XY pad graphics -----------------------
 --
 function paintScope(control, value)
     local bounds = control:getBounds()
@@ -1347,25 +1370,27 @@ function paintScope(control, value)
     local top    = 0
     local bottom = bounds[HEIGHT] - 1
 
-    -- Clear the Control's bounding box
     g.setColor(0x0000)
     g.fillRect(0, 0, bounds[WIDTH], bounds[HEIGHT])
     g.setColor(0xffff)
     g.drawRoundRect(0, 0, bounds[WIDTH], bounds[HEIGHT], 5)
 
-    -- midline
-    g.setColor(0x7bef) -- light gray
+    g.setColor(0x7bef)
     local mid = normToPixel(0, top + 4, bottom - 4)
     g.drawLine(left + 4, mid, right - 4, mid)
 
-    -- signal trace
     g.setColor(0xffff)
+    local maxSamples = math.min(SCOPE_WIDTH, (right - left - 7))
+    if maxSamples < 2 then return end
+
     local lastx = left + 4
-    local lasty = normToPixel(scope.y[1], top + 4, bottom - 4)
-    for x = 2, math.min(SCOPE_WIDTH - 4, right - 4) do
-        local y = normToPixel(scope.y[x], top + 4, bottom - 4)
-        g.drawLine(lastx, lasty, x, y)
-        lastx, lasty = x, y
+    local lasty = normToPixel(scope.y[1] or 0, top + 4, bottom - 4)
+
+    for i = 2, maxSamples do
+        local px = left + 3 + i   -- maps i=2 -> x=5 etc
+        local py = normToPixel(scope.y[i] or 0, top + 4, bottom - 4)
+        g.drawLine(lastx, lasty, px, py)
+        lastx, lasty = px, py
     end
 end
 
@@ -1380,7 +1405,6 @@ end
 function initializeScopeData()
     for i = 1, SCOPE_WIDTH do scope.y[i] = 0 end
 end
-
 
 -- ------------------ COMPARE_IT toggle block -----------------------------------
 -- A = parsed edit-buffer state (captured once per patch parse)
@@ -1893,10 +1917,11 @@ function events.onPotTouchChange(potId, controlId, touched)
   end
 end
 
--- restore cached patch names and change to performance page when preset loads
+-- restore cached patch names, change to performance page, initialize lfo scope when preset loads
 function preset.onLoad()
   loadNameBank()       
   pages.display(12)
+
   local bounds = scopeControl:getBounds()
   bounds[WIDTH] = SCOPE_WIDTH
   bounds[HEIGHT] = SCOPE_HEIGHT
