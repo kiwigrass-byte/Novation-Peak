@@ -121,45 +121,15 @@ creates a triangular probability distribution, making smaller movements more lik
 - The smoothBezier function (cubic ease-in/ease-out: t² × (3 - 2t)) curves the progression, so the value accelerates into the movement and decelerates out of it — more organic/musical than a flat linear ramp.
 - So the S&H still randomly picks targets and still uses the same glide duration, but now the path between them is curved instead of straight. 
 - The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal. With: `local MACRO_LFO_SH_MAX_STEP = 1`, `local MACRO_LFO_SH_GLIDE_FRACTION = 1.00`
-- The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.This produces an eased transition:
-- Movement begins slowly.
-- The rate increases toward the middle of the transition.
-- Movement slows as it approaches the next random target.
-- The output reaches each target with zero velocity.
-- The next target is selected immediately, allowing continuous movement.
+- The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.This produces an eased transition: Movement begins slowly. The rate increases toward the middle of the transition. Movement slows as it approaches the next random target. The output reaches each target with zero velocity. The next target is selected immediately, allowing continuous movement.
 
 ### 11) Macro S&H sampling-rate scaling for longer LFO periods
-**Problem:** The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static and unresponsive. At short periods (300 ms), sampling once per cycle is already fast enough.
-
-**Solution:** Scale the S&H sampling rate (samples per cycle) with LFO period to maintain constant perceived randomness:
-
-- ≤ 2 sec: 1 sample/cycle
-- ≥ 20 sec: 4 samples/cycle
+The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static and unresponsive. At short periods (300 ms), sampling once per cycle is already fast enough. The solution is to scale the S&H sampling rate (samples per cycle) with LFO period to maintain  constant perceived randomness:
+- ≤ 2 sec: 1 sample/cycle (once every 2 seconds)
+- ≥ 20 sec: 5 samples/cycle (once every 4 seconds)
 - Linear interpolation between
-
-For example, a 10-second LFO period samples ~2.33 times per cycle.
-
-**Implementation:**
-- Add an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`.
-- `shPhase` advances at a scaled rate: `stepMs / (periodMs / multiplier)`.
-- When `shPhase` wraps, trigger a new S&H target (`chooseNextSampleAndHoldTarget`).
-- The glide/hold timing (`updateSampleAndHoldGlide`) uses `shPhase` instead of the triangle's `phase`, so glide behavior is relative to the sub-cycle, not the full cycle.
-- Triangle mode is unaffected; it continues to update on every tick at the base period.
-
-**Result:** S&H feels responsive across the full rate range (300 ms–20 s) without changing the perceived glide shape or hold duration relative to each sampled target.
-
-### Applied in this preset
-- Patch scanning uses `schedule.every()` with a 200 ms interval.
-- `scanHandle` is retained so the repeating task can be cancelled.
-- `stopPatchScanner()` flushes pending patch-name persistence after cancelling
-  the scheduled task.
-- The macro-knob LFO remains responsible for the timer-driven high-frequency
-  modulation path, while patch scanning uses the independent scheduling path.
-
-## Runtime responsiveness / lock behavior (important)
-
-Electra One script execution and paint callbacks contend for a shared lock.  
-If script work holds the lock too long, paint can miss frames (around 20 ms timeout) and controls appear unresponsive.
+Added an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`. `shPhase` advances at a scaled rate: `stepMs / (periodMs / multiplier)`. When `shPhase` wraps, trigger a new S&H target (`chooseNextSampleAndHoldTarget`). The glide/hold timing (`updateSampleAndHoldGlide`) uses `shPhase` instead of the triangle's `phase`, so glide behavior is relative to the sub-cycle, not the full cycle. Triangle mode is unaffected; it continues to update on every tick at the base period.
+- S&H feels responsive across the full rate range (300 ms–20 s) without changing the perceived glide shape or hold duration relative to each sampled target.
 
 ### Practical rules
 - Do small chunks of work frequently instead of long blocks.
