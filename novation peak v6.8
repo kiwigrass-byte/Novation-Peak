@@ -922,8 +922,7 @@ local MACRO_LFO_BIPOLAR = 2
 
 -- Macro LFO waveforms
 local MACRO_LFO_TRIANGLE = 0
-local MACRO_LFO_SINE = 1
-local MACRO_LFO_SH = 2
+local MACRO_LFO_SH = 1
 
 -- S&H behavior
 -- Maximum movement toward a new random target per cycle,
@@ -980,16 +979,9 @@ local function sampleAndHoldMacroValue()
   return math.floor(value + 0.5)
 end
 
-function sineMacroValue()
-    local value = math.sin(macroLfo.phase * 2 * math.pi) * macroLfo.amplitude
-    return math.floor(value + 0.5)
-end
-
 local function currentMacroLfoValue()
   if macroLfo.waveform == MACRO_LFO_SH then
     return sampleAndHoldMacroValue()
-  elseif macroLfo.waveform == MACRO_LFO_SINE then
-    return sineMacroValue()
   end
   return triangleMacroValue()
 end
@@ -1317,9 +1309,7 @@ end
 --
 function displayMacroLfoWave(valueObject, value)
   if value == MACRO_LFO_SH then
-    return "S&H"
-  elseif value == MACRO_LFO_SINE then
-    return "Sine"
+    return "Smooth Random"
   end
 
   return "Triangle"
@@ -1331,9 +1321,7 @@ function macroLfoWaveChange(valueObject, value)
     value = MACRO_LFO_TRIANGLE
   end
 
-  -- If changing from triangle to S&H while running,
-  -- begin from the triangle's current position to avoid
-  -- an unrelated jump.
+  -- When switching to S&H, preserve the current output value.
   if value == MACRO_LFO_SH
       and macroLfo.waveform ~= MACRO_LFO_SH then
 
@@ -1342,8 +1330,7 @@ function macroLfoWaveChange(valueObject, value)
     local normalized = 1.0
 
     if range > 0 then
-      normalized =
-        (currentValue - macroLfo.minValue) / range
+      normalized = (currentValue - macroLfo.minValue) / range
     end
 
     normalized = clamp01(normalized)
@@ -1351,14 +1338,31 @@ function macroLfoWaveChange(valueObject, value)
     macroLfo.heldRandom = normalized
     macroLfo.shFromValue = normalized
     macroLfo.shToValue = normalized
-    macroLfo.shPhase = 0.5
+
+    -- Select a new target on the next timer tick.
+    macroLfo.shPhase = 1.0
+  end
+
+  -- When switching to Triangle, preserve the current output value.
+  if value == MACRO_LFO_TRIANGLE
+      and macroLfo.waveform ~= MACRO_LFO_TRIANGLE then
+
+    local currentValue = sampleAndHoldMacroValue()
+    local range = macroLfo.maxValue - macroLfo.minValue
+    local normalized = 1.0
+
+    if range > 0 then
+      normalized = (currentValue - macroLfo.minValue) / range
+    end
+
+    normalized = clamp01(normalized)
+
+    -- Triangle rises from 0->1 over phase 0->0.5.
+    -- Place phase on the rising edge so the value matches immediately.
+    macroLfo.phase = normalized / 2
   end
 
   macroLfo.waveform = value
-
-  -- When switching to triangle, the normal triangle calculation
-  -- immediately takes over. When switching to S&H, the current
-  -- value is held until the next cycle boundary.
   applyCurrentMacroLfoValue()
 
   print(
@@ -1366,6 +1370,8 @@ function macroLfoWaveChange(valueObject, value)
     .. displayMacroLfoWave(nil, value)
   )
 end
+
+
 
 -------------- A callback to draw the XY pad graphics -----------------------
 --
