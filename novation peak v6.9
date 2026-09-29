@@ -1305,7 +1305,13 @@ local function lfoRateToPeriodMs(value)
   return math.floor(math.exp(logPeriod) + 0.5)
 end
 
--- formatter for speed control
+-- update periodMs whenever the speed value is changed
+function lfoRateChange(valueObject, value)
+  macroLfo.periodMs = lfoRateToPeriodMs(value)
+  print(string.format( "Macro LFO period set to %d ms", macroLfo.periodMs ))
+end
+
+-- formatter for the speed control
 function displayLfoRate(valueObject, value)
   local periodMs = lfoRateToPeriodMs(value)
   -- Get the current waveform to know which label to show
@@ -1326,12 +1332,6 @@ function displayLfoRate(valueObject, value)
   else
     return string.format("%d ms", periodMs)
   end
-end
-
--- callback to update periodMs when speed value is changed
-function lfoRateChange(valueObject, value)
-  macroLfo.periodMs = lfoRateToPeriodMs(value)
-  print(string.format( "Macro LFO period set to %d ms", macroLfo.periodMs ))
 end
 
 -- ---------------- Macro LFO waveform control ----------------
