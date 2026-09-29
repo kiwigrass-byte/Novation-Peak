@@ -142,10 +142,10 @@ Replaced the triangle waveform with a sine wave for the macro LFO. The sine wave
 ### 2. Smooth Random: Reflection → Wave Folding
 Changed the S&H (Sample & Hold) random target selection from **reflection** to **wave folding**:
 
-**Previous behavior (reflection):** When a random movement would overshoot a 0..1 boundary, the algorithm would instantly "mirror" the value back. This meant overshooting the boundary was a rare event, effectively limiting the available modulation range.
+**Previous behavior (reflection):** When a random movement would overshoot a 0..1 boundary, the algorithm would instantly "mirror" the value back. This meant overshooting the boundary was a rare event, effectively limiting the available modulation range. (e.g., 0.8 + 0.25 step → 1.05, the reflected path would be 0.8 -> 1 - 0.25 = 0.75). Then tried partial reflection (e.g., the partially reflected path would be 0.8 -> 0.8 + 0.2 - 0.05 = 0.95). 
 
 **New behavior (wave folding):** When a random target overshoots a boundary (e.g., 0.8 + 0.25 step → 1.05), the glide path now:
-1. **Visibly travels to the boundary** (0.8 → 1.0)
+1. **Travels to the boundary** (0.8 → 1.0)
 2. **Bounces back into range** (1.0 → 0.95)
 
 This creates a two-segment Bezier-interpolated glide that reaches the boundaries frequently, making full modulation range accessibility common rather than rare. Both segments use smooth Bezier easing, and their relative lengths are proportioned by distance to maintain consistent glide speed across the full path.
