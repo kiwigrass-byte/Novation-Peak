@@ -1305,9 +1305,22 @@ local function lfoRateToPeriodMs(value)
   return math.floor(math.exp(logPeriod) + 0.5)
 end
 
+-- formatter for speed control
 function displayLfoRate(valueObject, value)
   local periodMs = lfoRateToPeriodMs(value)
+  -- Get the current waveform to know which label to show
+  local waveformParam = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MACRO_LFO_WAVE) or MACRO_LFO_SINE
+  if waveformParam == MACRO_LFO_SH then
+    -- For Smooth Random, show the effective sampling interval per target
+    local shPeriodMs = periodMs / shSampleMultiplier(periodMs)
 
+    if shPeriodMs >= 1000 then
+      return string.format("%.1f s/step", shPeriodMs / 1000)
+    else
+      return string.format("%d ms/step", math.floor(shPeriodMs + 0.5))
+    end
+  end
+  -- Sine: an honest cycle period
   if periodMs >= 1000 then
     return string.format("%.1f s", periodMs / 1000)
   else
@@ -1315,25 +1328,8 @@ function displayLfoRate(valueObject, value)
   end
 end
 
-function lfoRateChange(valueObject, value)
-  macroLfo.periodMs = lfoRateToPeriodMs(value)
-
-  print(string.format(
-    "Macro LFO period set to %d ms",
-    macroLfo.periodMs
-  ))
-end
-
 -- ---------------- Macro LFO waveform control ----------------
 --
-function displayMacroLfoWave(valueObject, value)
-  if value == MACRO_LFO_SH then
-    return "Smooth Random"
-  end
-
-  return "Sine"
-end
-
 function macroLfoWaveChange(valueObject, value)
   if value ~= MACRO_LFO_SINE
       and value ~= MACRO_LFO_SH then
@@ -1376,21 +1372,22 @@ function macroLfoWaveChange(valueObject, value)
 
     normalized = clamp01(normalized)
 
-    -- Sine rises from 0->1 over phase 0->0.5.
-    -- Place phase on the rising edge so the value matches immediately.
-    macroLfo.phase = normalized / 2
+    -- Sine (unipolar, peak at phase 0.5) rises from 0->1 over phase 0->0.5.
+    -- acos maps normalized value back to a phase on the rising edge.
+    macroLfo.phase = math.acos(1 - 2 * normalized) / (2 * math.pi)
   end
 
   macroLfo.waveform = value
   applyCurrentMacroLfoValue()
 
-  print(
-    "Macro LFO waveform: "
-    .. displayMacroLfoWave(nil, value)
-  )
+  -- Force displayLfoRate to re-run by triggering a parameter change event.
+  -- Increment by 1, then immediately set back to the original value.
+  local currentRateValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_LFO_RATE) or 0
+  parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue + 1)
+  parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue)
+
+  print("Macro LFO waveform changed")
 end
-
-
 
 -------------- A callback to draw the XY pad graphics -----------------------
 --
