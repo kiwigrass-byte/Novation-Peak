@@ -131,6 +131,27 @@ The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At l
 Added an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`. `shPhase` advances at a scaled rate: `stepMs / (periodMs / multiplier)`. When `shPhase` wraps, trigger a new S&H target (`chooseNextSampleAndHoldTarget`). The glide/hold timing (`updateSampleAndHoldGlide`) uses `shPhase` instead of the triangle's `phase`, so glide behavior is relative to the sub-cycle, not the full cycle. Triangle mode is unaffected; it continues to update on every tick at the base period.
 - S&H feels responsive across the full rate range (300 ms–20 s) without changing the perceived glide shape or hold duration relative to each sampled target.
 
+## Waveform & Wave-Folding Changes (v6.9)
+
+### 1. Triangle → Sine Waveform
+Replaced the triangle waveform with a sine wave for the macro LFO. The sine wave:
+- Uses cosine-based calculation to achieve a smooth, symmetric curve
+- Maintains the same peak orientation (phase 0.5 = maximum) as the triangle it replaces
+- Provides a softer, more musical modulation curve alongside the smooth random S&H waveform
+
+### 2. Smooth Random: Reflection → Wave Folding
+Changed the S&H (Sample & Hold) random target selection from **reflection** to **wave folding**:
+
+**Previous behavior (reflection):** When a random movement would overshoot a 0..1 boundary, the algorithm would instantly "mirror" the value back. This meant overshooting the boundary was a rare event, effectively limiting the available modulation range.
+
+**New behavior (wave folding):** When a random target overshoots a boundary (e.g., 0.8 + 0.25 step → 1.05), the glide path now:
+1. **Visibly travels to the boundary** (0.8 → 1.0)
+2. **Bounces back into range** (1.0 → 0.95)
+
+This creates a two-segment Bezier-interpolated glide that reaches the boundaries frequently, making full modulation range accessibility common rather than rare. Both segments use smooth Bezier easing, and their relative lengths are proportioned by distance to maintain consistent glide speed across the full path.
+
+**Implementation:** A new `shBoundary` waypoint field tracks the boundary the glide must pass through, and `updateSampleAndHoldGlide()` splits the glide into two eased segments (from→boundary and boundary→to) when folding occurs.
+
 ### Practical rules
 - Do small chunks of work frequently instead of long blocks.
 - Avoid `helpers.delay()` for waits (it blocks while holding the lock).
