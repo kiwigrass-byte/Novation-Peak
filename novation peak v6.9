@@ -1385,6 +1385,8 @@ function macroLfoWaveChange(valueObject, value)
   local currentRateValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_LFO_RATE) or 0
   parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue + 1)
   parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue)
+  -- Immediately restore without waiting for lfoRateChange to re-run
+  macroLfo.periodMs = lfoRateToPeriodMs(currentRateValue)
 
   print("Macro LFO waveform changed")
 end
