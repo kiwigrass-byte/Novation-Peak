@@ -5,10 +5,7 @@ local authorDate = "Kiwigrass"
 info.setText(authorDate)
 
 -- Preset compatibility check
-assert(
-    controller.isRequired(MODEL_MK2, "5.0.0"),
-    "Version 5.0.0 or higher is required"
-)
+assert( controller.isRequired(MODEL_MK2, "5.0.0"), "Version 5.0.0 or higher is required" )
 
 local deviceId = 1 -- the device ID used in the E1 preset
 local device = devices.get(deviceId)
@@ -682,7 +679,7 @@ function startPatchScanner(valueObject, value)
 end
 
 -- ---------------- Mod amount macro bipolar scaling ----------------
---
+-- An add-on feature that allows macro scaling of mod matrix modulation depths 
 local PARAM_MACRO_KNOB = 10038
 local MACRO_MAX = 16383
 local MACRO_CENTER = 8192
@@ -724,7 +721,45 @@ for i, p in ipairs(PARAM_MOD_AMOUNT) do PARAM_MOD_AMOUNT_INDEX[p] = i end
 local modAmountBase = {}
 for i = 1, 16 do modAmountBase[i] = 64 end
 
--- state data for the macro knob lfo 
+-- ---------------- Mod amount lock toggles ----------------
+-- 16 boolean locks, one per mod slot. When locked, the macro knob will
+-- NOT rewrite that slot's PARAM_MOD_AMOUNT value — it stays exactly where
+-- the user last set it, regardless of macro position.
+
+local PARAM_MOD_LOCK = { 10050, 10051, 10052, 10053, 10054, 10055, 10056, 10057,
+                      10058, 10059, 10060, 10061,10062, 10063, 10064, 10065, }
+
+local CTRL_MOD_LOCK = { 399, 400, 401, 402, 403, 404, 405, 406,
+                    407, 408, 414, 415, 416, 417, 420, 421, }
+
+local PARAM_MOD_LOCK_INDEX = {}
+for i, p in ipairs(PARAM_MOD_LOCK) do PARAM_MOD_LOCK_INDEX[p] = i end
+
+local modAmountLocked = {}
+for i = 1, 16 do modAmountLocked[i] = false end
+
+local lockColors = { off = 0x202020, on = RED }
+
+-- bound to the 16 lock toggle controls.
+function lockToggle(valueObject, value)
+  local parameter = valueObject:getMessage():getParameterNumber()
+  local idx = PARAM_MOD_LOCK_INDEX[parameter]
+  if not idx then return value end
+
+  modAmountLocked[idx] = (value ~= 0)
+
+  local ctrl = controls.get(CTRL_MOD_LOCK[idx])
+  if ctrl then
+    ctrl:setColor( modAmountLocked[idx] and lockColors.on or lockColors.off )
+  end
+
+  return value
+end
+
+-------------------------- Macro knob LFO --------------------
+--
+-- state data for the macro knob LFO 
+--
 local macroLfo = {
   isRunning = false,
   phase = 0.5,
@@ -734,21 +769,84 @@ local macroLfo = {
   stepMs = 50,     -- timer interval
 
   mode = MACRO_LFO_UNIPOLAR,
-  waveform = MACRO_LFO_TRIANGLE,
+  waveform = MACRO_LFO_SINE,
 
-  -- Current normalized S&H value.
-  -- 0.0 = minimum of active range
-  -- 1.0 = maximum of active range
+  -- Current normalized S&H value. 0.0 = minimum of active range, 1.0 = maximum of active range
   heldRandom = 1.0,
 
   -- S&H interpolation values.
   shFromValue = 1.0,
   shToValue = 1.0,
+  shBoundary = nil, -- waypoint the glide must pass through when the target was folded
 
   minValue = MACRO_CENTER,
   maxValue = MACRO_MAX,
-  amplitude = 1.0 -- amplitude of waveform (not used)
+  amplitude = 1.0 -- amplitude of waveform
 }
+
+-- constants for the macro knob LFO 
+--
+local PARAM_MACRO_LFO = 10070
+local PARAM_LFO_RATE = 10071
+local PARAM_MACRO_LFO_WAVE = 10072
+local PARAM_MACRO_LFO_AMOUNT = 10073
+
+-- Macro LFO modes
+local MACRO_LFO_OFF = 0
+local MACRO_LFO_UNIPOLAR = 1
+local MACRO_LFO_BIPOLAR = 2
+
+-- Macro LFO waveforms
+local MACRO_LFO_SINE = 0
+local MACRO_LFO_SH = 1
+
+-- S&H behavior
+-- Maximum movement toward a new random target per cycle,
+-- expressed as a fraction of the active macro range.
+local MACRO_LFO_SH_MAX_STEP = 1.00
+
+-- Portion of each S&H cycle used to glide toward the
+-- new target. The remainder of the cycle holds the target.
+-- = 1 -> continuous movement (0 hold time)
+local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
+
+-- ---------------- macro LFO utility functions ----------------
+--
+local function clamp01(value)
+  if value < 0 then
+    return 0
+  elseif value > 1 then
+    return 1
+  end
+
+  return value
+end
+
+-- Sine waveform mapped into active macro range.
+local function sineMacroValue()
+  -- phase 0..1 maps to a full sine cycle; bipolar form peaks at phase 0.5
+  local sineBipolar = -math.cos(macroLfo.phase * 2 * math.pi)  -- -1..1
+  local center = (macroLfo.minValue + macroLfo.maxValue) / 2
+  local halfRange = (macroLfo.maxValue - macroLfo.minValue) / 2
+  local value = center + sineBipolar * halfRange * macroLfo.amplitude
+  return math.floor(value + 0.5)
+end
+
+-- Random held value mapped into the active macro range.
+local function sampleAndHoldMacroValue()
+  local heldBipolar = (macroLfo.heldRandom * 2) - 1  -- -1..1
+  local center = (macroLfo.minValue + macroLfo.maxValue) / 2
+  local halfRange = (macroLfo.maxValue - macroLfo.minValue) / 2
+  local value = center + heldBipolar * halfRange * macroLfo.amplitude
+  return math.floor(value + 0.5)
+end
+
+local function currentMacroLfoValue()
+  if macroLfo.waveform == MACRO_LFO_SH then
+    return sampleAndHoldMacroValue()
+  end
+  return sineMacroValue()
+end
 
 -- ---------------------------------------------------------------------------
 -- Macro-LFO modulation cache
@@ -831,45 +929,9 @@ local function modulateAmountFromBaseline(index, targetValue)
   )
 end
 
--- ---------------- Mod amount lock toggles ----------------
--- 16 boolean locks, one per mod slot. When locked, the macro knob will
--- NOT rewrite that slot's PARAM_MOD_AMOUNT value — it stays exactly where
--- the user last set it, regardless of macro position.
-
-local PARAM_MOD_LOCK = { 10050, 10051, 10052, 10053, 10054, 10055, 10056, 10057,
-                      10058, 10059, 10060, 10061,10062, 10063, 10064, 10065, }
-
-local CTRL_MOD_LOCK = { 399, 400, 401, 402, 403, 404, 405, 406,
-                    407, 408, 414, 415, 416, 417, 420, 421, }
-
-local PARAM_MOD_LOCK_INDEX = {}
-for i, p in ipairs(PARAM_MOD_LOCK) do PARAM_MOD_LOCK_INDEX[p] = i end
-
-local modAmountLocked = {}
-for i = 1, 16 do modAmountLocked[i] = false end
-
-local lockColors = { off = 0x202020, on = RED }
-
--- bound to the 16 lock toggle controls.
-function lockToggle(valueObject, value)
-  local parameter = valueObject:getMessage():getParameterNumber()
-  local idx = PARAM_MOD_LOCK_INDEX[parameter]
-  if not idx then return value end
-
-  modAmountLocked[idx] = (value ~= 0)
-
-  local ctrl = controls.get(CTRL_MOD_LOCK[idx])
-  if ctrl then
-    ctrl:setColor( modAmountLocked[idx] and lockColors.on or lockColors.off )
-  end
-
-  return value
-end
-
 local function applyMacroToAll(factorOverride, ignoreLocks)
   macroApplying = true
   local factor = factorOverride or macroFactor()
-
   for i = 1, 16 do
     -- Skip slots with no modulation amount set — scaling has no effect.
     if modAmountBase[i] ~= 64 then
@@ -888,10 +950,8 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
       end
     end
   end
-
  -- Baseline lifecycle is managed explicitly by LFO start/resume/stop
  -- and compare transitions. Do not auto-clear it here.
-
   macroApplying = false
 end
 
@@ -908,82 +968,6 @@ local function copyModAmountBase(src)
     t[i] = (src and src[i]) or 64
   end
   return t
-end
-
--- ---------------- Macro amount LFO ----------------
-local PARAM_MACRO_LFO = 10070
-local PARAM_LFO_RATE = 10071
-local PARAM_MACRO_LFO_WAVE = 10072
-
--- Macro LFO modes
-local MACRO_LFO_OFF = 0
-local MACRO_LFO_UNIPOLAR = 1
-local MACRO_LFO_BIPOLAR = 2
-
--- Macro LFO waveforms
-local MACRO_LFO_TRIANGLE = 0
-local MACRO_LFO_SH = 1
-
--- S&H behavior
--- Maximum movement toward a new random target per cycle,
--- expressed as a fraction of the active macro range.
-local MACRO_LFO_SH_MAX_STEP = 1.00
-
--- Portion of each S&H cycle used to glide toward the
--- new target. The remainder of the cycle holds the target.
--- = 1 -> continuous movement (0 hold time)
-local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
-
--- ---------------- LFO utility functions ----------------
---
-local function clamp01(value)
-  if value < 0 then
-    return 0
-  elseif value > 1 then
-    return 1
-  end
-
-  return value
-end
-
--- Reflect a value back into the normalized 0..1 range.
--- Unlike clamping, this preserves the overshoot at the boundary.
-local function reflect01(value)
-  while value < 0 or value > 1 do
-    if value < 0 then
-      value = -value
-    elseif value > 1 then
-      value = 2 - value
-    end
-  end
-
-  return value
-end
-
--- Triangle waveform:
--- phase 0.0   = minimum, phase 0.5   = maximum, phase 1.0   = minimum again
-local function triangleMacroValue()
-  local triangle
-  if macroLfo.phase < 0.5 then
-    triangle = macroLfo.phase * 2
-  else
-    triangle = 2 - macroLfo.phase * 2
-  end
-  local value =  ( macroLfo.minValue  + triangle * (macroLfo.maxValue - macroLfo.minValue) ) * macroLfo.amplitude
-  return math.floor(value + 0.5)
-end
-
--- Return the current S&H value mapped into the active macro range.
-local function sampleAndHoldMacroValue()
-  local value = ( macroLfo.minValue  + macroLfo.heldRandom  * (macroLfo.maxValue - macroLfo.minValue) ) * macroLfo.amplitude
-  return math.floor(value + 0.5)
-end
-
-local function currentMacroLfoValue()
-  if macroLfo.waveform == MACRO_LFO_SH then
-    return sampleAndHoldMacroValue()
-  end
-  return triangleMacroValue()
 end
 
 -- ---------------- S&H sampling-rate scaling ----------------
@@ -1008,27 +992,39 @@ local function shSampleMultiplier(periodMs)
   return 1.0 + t * (SH_RATE_MAX_MULT - 1.0)
 end
 
--- ---------------- correlated S&H generating random Bézier-like modulation ----------------
--- Select a nearby random target.
--- math.random() + math.random() - 1 creates a triangular
--- distribution centered around zero. Small movements are
--- more likely than large movements.
-local function chooseNextSampleAndHoldTarget()
-  macroLfo.shFromValue = macroLfo.heldRandom
-
-  local signedRandom = math.random() + math.random() - 1
-
-  local newTarget =
-    macroLfo.shFromValue
-    + signedRandom * MACRO_LFO_SH_MAX_STEP
-
-  macroLfo.shToValue = reflect01(newTarget)
-end
-
+-- ---------------- correlated random sampling with Bézier-like interpolation and wave folding ----------------
+--
 -- a smooth Bezier curve used to interpolate between S&H points
 local function smoothBezier(t)
   return t * t * (3 - 2 * t)
 end
+
+-- Select a nearby random target.
+-- math.random() + math.random() - 1 creates a triangular distribution centered around zero. Small movements are more likely than large movements.
+local function chooseNextSampleAndHoldTarget()
+  macroLfo.shFromValue = macroLfo.heldRandom
+ 
+  local signedRandom = math.random() + math.random() - 1
+ 
+  local newTarget =
+    macroLfo.shFromValue
+    + signedRandom * MACRO_LFO_SH_MAX_STEP
+ 
+  -- If the raw target overshoots 0 or 1, the glide path must actually visit that boundary before bouncing back, rather than cutting straight to the
+  -- final folded value. shBoundary records that waypoint (nil = no fold, direct glide from -> to).
+  if newTarget > 1 then
+    local overshoot = newTarget - 1
+    macroLfo.shBoundary = 1
+    macroLfo.shToValue = 1 - overshoot
+  elseif newTarget < 0 then
+    local overshoot = -newTarget
+    macroLfo.shBoundary = 0
+    macroLfo.shToValue = overshoot
+  else
+    macroLfo.shBoundary = nil
+    macroLfo.shToValue = newTarget
+  end
+ end
 
 local function updateSampleAndHoldGlide()
   local glideFraction = MACRO_LFO_SH_GLIDE_FRACTION
@@ -1043,15 +1039,38 @@ local function updateSampleAndHoldGlide()
     macroLfo.heldRandom = macroLfo.shToValue
     return
   end
-
+ 
   -- Interpolate from the previous value to the new target using a Bezier curve instead of linear.
   local glidePosition = clamp01(macroLfo.shPhase / glideFraction)
-  glidePosition = smoothBezier(glidePosition)
 
-  macroLfo.heldRandom =
-    macroLfo.shFromValue
-    + (macroLfo.shToValue - macroLfo.shFromValue)
-      * glidePosition
+  if macroLfo.shBoundary == nil then
+    -- Direct glide from -> to using a Bezier curve instead of linear.
+    local eased = smoothBezier(glidePosition)
+    macroLfo.heldRandom =
+      macroLfo.shFromValue
+      + (macroLfo.shToValue - macroLfo.shFromValue) * eased
+  else
+    -- Two-segment glide: from -> boundary -> to, so the path visibly reaches the boundary before bouncing back.
+    local d1 = math.abs(macroLfo.shBoundary - macroLfo.shFromValue)
+    local d2 = math.abs(macroLfo.shToValue - macroLfo.shBoundary)
+    local total = d1 + d2
+    local splitPoint = (total > 0) and (d1 / total) or 0.5
+
+    if glidePosition < splitPoint then
+      local localT = (splitPoint > 0) and (glidePosition / splitPoint) or 1
+      local eased = smoothBezier(localT)
+      macroLfo.heldRandom =
+        macroLfo.shFromValue
+        + (macroLfo.shBoundary - macroLfo.shFromValue) * eased
+    else
+      local remaining = 1 - splitPoint
+      local localT = (remaining > 0) and ((glidePosition - splitPoint) / remaining) or 1
+      local eased = smoothBezier(localT)
+      macroLfo.heldRandom =
+        macroLfo.shBoundary
+        + (macroLfo.shToValue - macroLfo.shBoundary) * eased
+    end
+  end
 end
 
 -- ---------------- Apply current LFO value ----------------
@@ -1312,20 +1331,20 @@ function displayMacroLfoWave(valueObject, value)
     return "Smooth Random"
   end
 
-  return "Triangle"
+  return "Sine"
 end
 
 function macroLfoWaveChange(valueObject, value)
-  if value ~= MACRO_LFO_TRIANGLE
+  if value ~= MACRO_LFO_SINE
       and value ~= MACRO_LFO_SH then
-    value = MACRO_LFO_TRIANGLE
+    value = MACRO_LFO_SINE
   end
 
   -- When switching to S&H, preserve the current output value.
   if value == MACRO_LFO_SH
       and macroLfo.waveform ~= MACRO_LFO_SH then
 
-    local currentValue = triangleMacroValue()
+    local currentValue = sineMacroValue()
     local range = macroLfo.maxValue - macroLfo.minValue
     local normalized = 1.0
 
@@ -1343,9 +1362,9 @@ function macroLfoWaveChange(valueObject, value)
     macroLfo.shPhase = 1.0
   end
 
-  -- When switching to Triangle, preserve the current output value.
-  if value == MACRO_LFO_TRIANGLE
-      and macroLfo.waveform ~= MACRO_LFO_TRIANGLE then
+  -- When switching to Sine, preserve the current output value.
+  if value == MACRO_LFO_SINE
+      and macroLfo.waveform ~= MACRO_LFO_SINE then
 
     local currentValue = sampleAndHoldMacroValue()
     local range = macroLfo.maxValue - macroLfo.minValue
@@ -1357,7 +1376,7 @@ function macroLfoWaveChange(valueObject, value)
 
     normalized = clamp01(normalized)
 
-    -- Triangle rises from 0->1 over phase 0->0.5.
+    -- Sine rises from 0->1 over phase 0->0.5.
     -- Place phase on the rising edge so the value matches immediately.
     macroLfo.phase = normalized / 2
   end
@@ -1838,7 +1857,7 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
 
     return
   end
-  -- Macro LFO waveform: (0 = triangle, 1 = sample and hold
+  -- Macro LFO waveform: (0 = sine, 1 = sample and hold
   if pType == PT_VIRTUAL and pNum == PARAM_MACRO_LFO_WAVE then
     macroLfoWaveChange(valueObjects[1], midiValue)
     return
