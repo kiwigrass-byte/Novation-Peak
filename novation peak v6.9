@@ -1328,6 +1328,12 @@ function displayLfoRate(valueObject, value)
   end
 end
 
+-- callback to update periodMs when speed value is changed
+function lfoRateChange(valueObject, value)
+  macroLfo.periodMs = lfoRateToPeriodMs(value)
+  print(string.format( "Macro LFO period set to %d ms", macroLfo.periodMs ))
+end
+
 -- ---------------- Macro LFO waveform control ----------------
 --
 function macroLfoWaveChange(valueObject, value)
