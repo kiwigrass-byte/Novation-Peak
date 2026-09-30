@@ -1253,7 +1253,6 @@ function macroLfoWaveChange(valueObject, value)
 end
 
 -- A callback to draw the XY pad graphics
---
 function paintScope(control, value)
     local bounds = control:getBounds()
     local left   = 0
@@ -1340,7 +1339,6 @@ local snapshotA = nil   -- table indexed same as PATCH_PARAM_MAP: value at time 
 local snapshotB = nil   -- table indexed same as PATCH_PARAM_MAP: live/edited values, captured on toggle
 local comparingActive = false
 local snapshotBModAmounts = nil
-
 
 local function computeValueFromBytes(entry, bytes)
   local sysExByte = entry[1]
@@ -1471,7 +1469,6 @@ end
 -- assigns sysEx MIDI values from received patch to corresponding preset parameter values via PATCH_PARAM_MAP: {byte #, parameter type, parameter #}
 function assignParam()   
   if not sysExPatch[2] then return end -- do not process if not parsed
-
   parameterMap.transaction(function()
     for i = 1, #PATCH_PARAM_MAP do
       local sysExByte = PATCH_PARAM_MAP[i][1]
@@ -1485,29 +1482,24 @@ function assignParam()
       end
       parameterMap.updateValue(deviceId, parType, parNum, value)
     end
-
     -- Establish the unscaled macro bases from the newly parsed patch.
     for i = 1, 16 do
       modAmountBase[i] =
         parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i]) or 64
     end
-
     -- A newly parsed patch starts at full macro scale.
     macroKnobValue = MACRO_MAX
     parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_MACRO_KNOB, MACRO_MAX)
   end)
-
   -- The patch parser changed the stored modulation amount values.
   -- Any previous temporary LFO baseline is invalid.
   clearLfoMapBaseline()
-
   -- Re-evaluate all modulation slots after the complete patch has been parsed.
   -- A slot is dimmed only when both source parameters are zero.
   modGroup:updateAll()
   modFxGroup:updateAll()
   -- Establish new A/B baseline for this patch.
   captureSnapshotA()
-
   -- Update info bar with patch name (bytes 2–17 of sysExPatch)
   local patchName = ""
   for j = 0, 15 do
@@ -1537,11 +1529,8 @@ function midi.onSysex(midiInput, sysexBlock)
        and sysexBlock:peek(7) == 0x00 and sysexBlock:peek(8) == 0x7E
   end
   if not isPeak() then return end
-  
   local cmd = sysexBlock:peek(9)
   local len = sysexBlock:getLength()
---  print("Peak sysex message received on interface= " .. midiInput.interface..", cmd=0x"..string.format("%02X",cmd).." len="..len)
-
   -- a stored patch received and the patch name placed in nameBank[bankNum][patchNum]
   if len > 33 and cmd == 0x01 then 
     local bankNum = sysexBlock:peek(13)
@@ -1616,7 +1605,6 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
   local pType = msg:getType()
   local pNum = msg:getParameterNumber()
   local settingsHeader = {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x04,0x00,0x00,0x00,0x00,0x00,0x00} -- first section of sysEx message for sending system settings to Peak 
-  
   -- on a physical parameter change on UI send the corresponding MIDI message to Peak 
   if pType == PT_VIRTUAL and pNum < 8000 then
     sendSimpleNRPN(pNum, midiValue)
@@ -1660,9 +1648,7 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     print("New MIDI Channel assigned by preset: "..math.floor(midiChannel))
     assignChannel(nil,1)         -- should set device channel
   end  
-
   -- Other INTERNAL only UI actions with purely virtual parameters
-  
   -- Macro LFO enable toggle (0 = off, 1 = unipolar, 2 = bipolar)
   if pType == PT_VIRTUAL and pNum == PARAM_MACRO_LFO then
     if midiValue == MACRO_LFO_OFF then
@@ -1670,7 +1656,6 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     else
       startMacroLfo(midiValue)
     end
-
     return
   end
   -- Macro LFO waveform: (0 = sine, 1 = sample and hold
@@ -1684,24 +1669,19 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     applyMacroToAll()
     return
   end
-  
   -- User (or macro) touched a mod-amount control: keep base in sync
   if pType == PT_VIRTUAL then
     local amtIdx = PARAM_MOD_AMOUNT_INDEX[pNum]
-
     if amtIdx and not macroApplying and not compareApplying then
       local factor = macroFactor()
-
       if math.abs(factor) > 0.02 then
         -- Reconstruct the unscaled base from the currently displayed amount.
         local base = 64 + (midiValue - 64) / factor
-
         if base < 0 then
           base = 0
         elseif base > 127 then
           base = 127
         end
-
         modAmountBase[amtIdx] = base
       else
       -- Near the bipolar center, the original base cannot be recovered
