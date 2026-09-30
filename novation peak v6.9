@@ -1313,14 +1313,10 @@ local PATCH_PARAM_MAP = {
   {390,0,3242},{391,0,3243},{392,0,3244},{393,0,3245}
 }
 
--- Build once: a fast lookup of parameter numbers that belong to the mod-amount
--- macro system, so the generic snapshot machinery can skip them entirely.
--- Parameters that use non-linear/derived encoding and should not be
--- captured or restored by the generic COMPARE_IT snapshot machinery.
--- 16003 = combined master clock byte (sysEx byte 237 + bit from 238),
--- already handled independently via events.onPotTouchChange() /
--- sysExPatch writes, and its valid range does not match the raw
--- computed value in all cases.
+-- Build once: a fast lookup of parameter numbers that belong to the mod-amount macro system, so the generic snapshot machinery can skip them entirely.
+-- Parameters that use non-linear/derived encoding and should not be captured or restored by the generic COMPARE_IT snapshot machinery.
+-- 16003 = combined master clock byte (sysEx byte 237 + bit from 238), already handled independently via events.onPotTouchChange() /
+-- sysExPatch writes, and its valid range does not match the raw computed value in all cases.
 local PATCH_PARAM_SKIP_SNAPSHOT = {[16003] = true, }
 
 local PATCH_PARAM_IS_MOD_AMOUNT = {}
