@@ -750,6 +750,13 @@ function lockToggle(valueObject, value)
   return value
 end
 
+local function scaledAmount(base, factor)
+  local v = 64 + (base - 64) * factor
+  v = math.floor(v + 0.5)
+  if v < 0 then v = 0 elseif v > 127 then v = 127 end
+  return v
+end
+
 local function applyMacroToAll(factorOverride, ignoreLocks)
   macroApplying = true
   local factor = factorOverride or macroFactor()
