@@ -1359,14 +1359,15 @@ local function captureSnapshotA()
   snapshotA = snap
   snapshotB = nil
   snapshotBModAmounts = nil
-  -- Mod amounts are captured separately from the parsed parameter state,
-  -- as the unscaled base reference for A.
+  -- Mod amounts are captured separately from the parsed parameter state, as the unscaled base reference for A.
   for i = 1, 16 do
     modAmountBase[i] = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i]) or 64
   end
   macroBaseSnapshotA = copyModAmountBase(modAmountBase)
   macroBaseSnapshotB = nil
   comparingActive = false
+  -- clear any modulation matrix amount locks that were on
+  clearAllModLocks()
 end
 
 local function applySnapshot(snap)
@@ -1489,8 +1490,6 @@ function assignParam()
   -- The patch parser changed the stored modulation amount values.
   -- Any previous temporary LFO baseline is invalid.
   clearLfoMapBaseline()
-  -- clear any modulation matrix amount locks that were on
-  clearAllModLocks()
   -- Re-evaluate all modulation slots after the complete patch has been parsed.
   -- A slot is dimmed only when both source parameters are zero.
   modGroup:updateAll()
