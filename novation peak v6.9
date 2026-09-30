@@ -1326,9 +1326,7 @@ local PATCH_PARAM_MAP = {
 -- already handled independently via events.onPotTouchChange() /
 -- sysExPatch writes, and its valid range does not match the raw
 -- computed value in all cases.
-local PATCH_PARAM_SKIP_SNAPSHOT = {
-  [16003] = true,
-}
+local PATCH_PARAM_SKIP_SNAPSHOT = {[16003] = true, }
 
 local PATCH_PARAM_IS_MOD_AMOUNT = {}
 for i = 1, #PATCH_PARAM_MAP do
@@ -1367,7 +1365,6 @@ local function captureSnapshotA()
   snapshotA = snap
   snapshotB = nil
   snapshotBModAmounts = nil
-
   -- Mod amounts are captured separately from the parsed parameter state,
   -- as the unscaled base reference for A.
   for i = 1, 16 do
@@ -1375,21 +1372,17 @@ local function captureSnapshotA()
   end
   macroBaseSnapshotA = copyModAmountBase(modAmountBase)
   macroBaseSnapshotB = nil
-
   comparingActive = false
 end
 
 local function applySnapshot(snap)
   if not snap then return end
-
   for i = 1, #PATCH_PARAM_MAP do
     if not PATCH_PARAM_IS_MOD_AMOUNT[i] and snap[i] ~= nil then
       local parType = PATCH_PARAM_MAP[i][2] % 10
       local parNum  = PATCH_PARAM_MAP[i][3]
       local value   = snap[i]
-
       local ok, err = pcall( parameterMap.set, deviceId, parType, parNum, value )
-
       if not ok then
         print(string.format(
           "applySnapshot: parNum=%d parType=%d value=%s rejected (%s)",
@@ -1417,15 +1410,9 @@ end
 
 local function captureLiveModAmounts()
   local amounts = {}
-
   for i = 1, 16 do
-    amounts[i] = parameterMap.get(
-      deviceId,
-      PT_VIRTUAL,
-      PARAM_MOD_AMOUNT[i]
-    ) or 64
+    amounts[i] = parameterMap.get( deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i] ) or 64
   end
-
   return amounts
 end
 
@@ -1434,64 +1421,43 @@ function compareIt(valueObject, value)
     print("COMPARE_IT: no patch parsed yet")
     return
   end
-
   compareApplying = true
-
   if value == 1 then
     -- Remember whether LFO was running so we can resume on compare OFF.
     lfoWasRunningBeforeCompare = macroLfo.isRunning
     if macroLfo.isRunning then
       stopMacroLfo()
     end
-
     snapshotB = captureLiveAsB()
     snapshotBModAmounts = captureLiveModAmounts()
     macroBaseSnapshotB = copyModAmountBase(modAmountBase)
     comparingActive = true
-
     applySnapshot(snapshotA)
     modAmountBase = copyModAmountBase(macroBaseSnapshotA)
-
     -- Show the true parsed patch values, ignoring locks.
     applyMacroToAll(1, true)
-
     print("COMPARE_IT: showing A (true patch values)")
   else
     if snapshotB then
       applySnapshot(snapshotB)
       modAmountBase = copyModAmountBase(macroBaseSnapshotB)
-
       -- Restore live values for locked mod amounts.
       if snapshotBModAmounts then
         for i = 1, 16 do
-          local lockValue = parameterMap.get(
-            deviceId,
-            PT_VIRTUAL,
-            PARAM_MOD_LOCK[i]
-          ) or 0
-
+          local lockValue = parameterMap.get( deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i] ) or 0
           if lockValue ~= 0 then
-            parameterMap.set(
-              deviceId,
-              PT_VIRTUAL,
-              PARAM_MOD_AMOUNT[i],
-              snapshotBModAmounts[i]
-            )
+            parameterMap.set( deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i], snapshotBModAmounts[i] )
           end
         end
       end
       -- The stored Parameter Map has now been restored to B.
       -- Discard any baseline captured for the old state.
       clearLfoMapBaseline()
-
       -- Apply the current macro to unlocked slots only.
       applyMacroToAll()
-
       print("COMPARE_IT: restored B (live, current macro applied)")
     end
-
     comparingActive = false
-
     -- Resume LFO only if compare ON paused it.
     if lfoWasRunningBeforeCompare then
       captureLfoMapBaseline()
@@ -1805,17 +1771,14 @@ end
 function preset.onLoad()
   loadNameBank()       
   pages.display(12)
-
   local bounds = scopeControl:getBounds()
   bounds[WIDTH] = SCOPE_WIDTH
   bounds[HEIGHT] = SCOPE_HEIGHT
   scopeControl:setBounds(bounds)
-
   -- Initialize and assign Custom Control callbacks
   initializeScopeData();
   scopeControl:setPaintCallback(paintScope)
   scopeControl:repaint()
-
 end
 
 -- request Peak wavetable names and global settings after preset is loaded
