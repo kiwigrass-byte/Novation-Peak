@@ -793,6 +793,17 @@ local function syncLockStateFromParams()
   end
 end
 
+local function clearAllModLocks()
+  for i = 1, 16 do
+    modAmountLocked[i] = false
+    parameterMap.set(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i], 0)
+    local ctrl = controls.get(CTRL_MOD_LOCK[i])
+    if ctrl then
+      ctrl:setColor(lockColors.off)
+    end
+  end
+end
+
 -- ============================================================
 -- Macro knob LFO
 -- ============================================================
@@ -1478,6 +1489,8 @@ function assignParam()
   -- The patch parser changed the stored modulation amount values.
   -- Any previous temporary LFO baseline is invalid.
   clearLfoMapBaseline()
+  -- clear any modulation matrix amount locks that were on
+  clearAllModLocks()
   -- Re-evaluate all modulation slots after the complete patch has been parsed.
   -- A slot is dimmed only when both source parameters are zero.
   modGroup:updateAll()
