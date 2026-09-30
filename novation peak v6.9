@@ -756,179 +756,6 @@ function lockToggle(valueObject, value)
   return value
 end
 
--------------------------- Macro knob LFO --------------------
---
--- state data for the macro knob LFO 
---
-local macroLfo = {
-  isRunning = false,
-  phase = 0.5,
-  shPhase = 0.5,   -- independent phase accumulator for S&H sampling
-
-  periodMs = 4000, -- one complete cycle
-  stepMs = 50,     -- timer interval
-
-  mode = MACRO_LFO_UNIPOLAR,
-  waveform = MACRO_LFO_SINE,
-
-  -- Current normalized S&H value. 0.0 = minimum of active range, 1.0 = maximum of active range
-  heldRandom = 1.0,
-
-  -- S&H interpolation values.
-  shFromValue = 1.0,
-  shToValue = 1.0,
-  shBoundary = nil, -- waypoint the glide must pass through when the target was folded
-
-  minValue = MACRO_CENTER,
-  maxValue = MACRO_MAX,
-  amplitude = 1.0 -- amplitude of waveform
-}
-
--- constants for the macro knob LFO 
---
-local PARAM_MACRO_LFO = 10070
-local PARAM_LFO_RATE = 10071
-local PARAM_MACRO_LFO_WAVE = 10072
-local PARAM_MACRO_LFO_AMOUNT = 10073
-
--- Macro LFO modes
-local MACRO_LFO_OFF = 0
-local MACRO_LFO_UNIPOLAR = 1
-local MACRO_LFO_BIPOLAR = 2
-
--- Macro LFO waveforms
-local MACRO_LFO_SINE = 0
-local MACRO_LFO_SH = 1
-
--- S&H behavior
--- Maximum movement toward a new random target per cycle,
--- expressed as a fraction of the active macro range.
-local MACRO_LFO_SH_MAX_STEP = 1.00
-
--- Portion of each S&H cycle used to glide toward the
--- new target. The remainder of the cycle holds the target.
--- = 1 -> continuous movement (0 hold time)
-local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
-
--- ---------------- macro LFO utility functions ----------------
---
-local function clamp01(value)
-  if value < 0 then
-    return 0
-  elseif value > 1 then
-    return 1
-  end
-
-  return value
-end
-
--- Sine waveform mapped into active macro range.
-local function sineMacroValue()
-  -- phase 0..1 maps to a full sine cycle; bipolar form peaks at phase 0.5
-  local sineBipolar = -math.cos(macroLfo.phase * 2 * math.pi)  -- -1..1
-  local center = (macroLfo.minValue + macroLfo.maxValue) / 2
-  local halfRange = (macroLfo.maxValue - macroLfo.minValue) / 2
-  local value = center + sineBipolar * halfRange * macroLfo.amplitude
-  return math.floor(value + 0.5)
-end
-
--- Random held value mapped into the active macro range.
-local function sampleAndHoldMacroValue()
-  local heldBipolar = (macroLfo.heldRandom * 2) - 1  -- -1..1
-  local center = (macroLfo.minValue + macroLfo.maxValue) / 2
-  local halfRange = (macroLfo.maxValue - macroLfo.minValue) / 2
-  local value = center + heldBipolar * halfRange * macroLfo.amplitude
-  return math.floor(value + 0.5)
-end
-
-local function currentMacroLfoValue()
-  if macroLfo.waveform == MACRO_LFO_SH then
-    return sampleAndHoldMacroValue()
-  end
-  return sineMacroValue()
-end
-
--- ---------------------------------------------------------------------------
--- Macro-LFO modulation cache
---
--- parameterMap.modulate() changes the value sent to the Peak temporarily.
--- It does not change the stored Parameter Map value.
---
--- lfoMapBaseline[i] is therefore the stored value around which the LFO
--- modulation is applied. It is captured when the LFO starts and refreshed
--- whenever the normal macro state is deliberately rewritten.
--- ---------------------------------------------------------------------------
-local lfoMapBaseline = {}
-local lfoBaselineValid = false
-
-for i = 1, 16 do
-  lfoMapBaseline[i] = 64
-end
-
-local function captureLfoMapBaseline()
-  for i = 1, 16 do
-    lfoMapBaseline[i] =
-      parameterMap.get(
-        deviceId,
-        PT_VIRTUAL,
-        PARAM_MOD_AMOUNT[i]
-      ) or 64
-  end
-
-  lfoBaselineValid = true
-end
-
-local function clearLfoMapBaseline()
-  lfoBaselineValid = false
-
-  for i = 1, 16 do
-    lfoMapBaseline[i] = 64
-  end
-end
-
-local function scaledAmount(base, factor)
-  local v = 64 + (base - 64) * factor
-  v = math.floor(v + 0.5)
-  if v < 0 then v = 0 elseif v > 127 then v = 127 end
-  return v
-end
-
-local function modulateAmountFromBaseline(index, targetValue)
-  if not lfoBaselineValid then
-    return
-  end
-
-  local baseline = lfoMapBaseline[index]
-  local delta = targetValue - baseline
-
-  -- No modulation is needed when the desired value is already the stored
-  -- Parameter Map value.
-  if delta == 0 then
-    parameterMap.modulate(
-      deviceId,
-      PT_VIRTUAL,
-      PARAM_MOD_AMOUNT[index],
-      0,
-      0
-    )
-    return
-  end
-
-  -- For these Peak modulation amount parameters, the first MIDI message is
-  -- a 7-bit unsigned value. Use the raw MIDI-value distance as the depth and
-  -- the sign of the distance as the modulation direction.
-  local modulationValue = delta < 0 and -1.0 or 1.0
-  local depth = math.abs(delta)
-
-  parameterMap.modulate(
-    deviceId,
-    PT_VIRTUAL,
-    PARAM_MOD_AMOUNT[index],
-    modulationValue,
-    depth
-  )
-end
-
 local function applyMacroToAll(factorOverride, ignoreLocks)
   macroApplying = true
   local factor = factorOverride or macroFactor()
@@ -955,12 +782,98 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
   macroApplying = false
 end
 
--- ---------------- COMPARE_IT / macro sync ----------------
---
+-- ============================================================
+-- Macro knob LFO
+-- ============================================================
+
+-- ---------------- Macro LFO constants ----------------
+
+local PARAM_MACRO_LFO        = 10070
+local PARAM_LFO_RATE         = 10071
+local PARAM_MACRO_LFO_WAVE   = 10072
+local PARAM_MACRO_LFO_AMOUNT = 10073
+
+local MACRO_LFO_OFF      = 0
+local MACRO_LFO_UNIPOLAR = 1
+local MACRO_LFO_BIPOLAR  = 2
+
+local MACRO_LFO_SINE = 0
+local MACRO_LFO_SH   = 1
+
+local MACRO_LFO_SH_MAX_STEP = 1.00
+local MACRO_LFO_SH_GLIDE_FRACTION = 1.00
+
+local SH_RATE_MIN_PERIOD_MS = 2000
+local SH_RATE_MAX_PERIOD_MS = 20000
+local SH_RATE_MAX_MULT = 4
+
+-- ---------------- Macro LFO state ----------------
+
+local macroLfo = {
+  isRunning = false,
+
+  phase = 0.5,
+  shPhase = 0.5,
+
+  periodMs = 4000,
+  stepMs = 50,
+
+  mode = MACRO_LFO_UNIPOLAR,
+  waveform = MACRO_LFO_SINE,
+
+  heldRandom = 1.0,
+
+  shFromValue = 1.0,
+  shToValue = 1.0,
+  shBoundary = nil,
+
+  minValue = MACRO_CENTER,
+  maxValue = MACRO_MAX,
+  amplitude = 1.0
+}
+
+-- ---------------- Macro LFO compare state ----------------
+
 local macroBaseSnapshotA = nil
 local macroBaseSnapshotB = nil
 local compareApplying = false
 local lfoWasRunningBeforeCompare = false
+
+-- ---------------- Macro LFO scope state ----------------
+
+local SCOPE_WIDTH = 314
+local SCOPE_HEIGHT = 140
+local CTRL_LFO_SCOPE = 328
+
+local g = graphics
+local scopeControl = controls.get(CTRL_LFO_SCOPE)
+
+local scope = {
+  y = {}
+}
+
+local scopeRepaintDiv = 3
+local scopeRepaintCount = 0
+
+-- ---------------- Macro LFO modulation cache ----------------
+
+local lfoMapBaseline = {}
+local lfoBaselineValid = false
+
+for i = 1, 16 do
+  lfoMapBaseline[i] = 64
+end
+
+-- ---------------- Basic helpers ----------------
+
+local function clamp01(value)
+  if value < 0 then
+    return 0
+  elseif value > 1 then
+    return 1
+  end
+  return value
+end
 
 local function copyModAmountBase(src)
   local t = {}
@@ -970,48 +883,56 @@ local function copyModAmountBase(src)
   return t
 end
 
--- ---------------- S&H sampling-rate scaling ----------------
--- At short periods, sampling once per cycle already feels responsive.
--- At long periods, sampling once per cycle feels static, so we sample
--- more often (an effective "sub-cycle" rate) while still applying the 
--- normal glide/hold shape per sample.
-local SH_RATE_MIN_PERIOD_MS = 2000   -- <= this: multiplier = 1 (sample once per cycle)
-local SH_RATE_MAX_PERIOD_MS = 20000  -- >= this: multiplier = SH_RATE_MAX_MULT
-local SH_RATE_MAX_MULT = 4 -- eg., 20sec -> sample every 5 sec; 2sec -> sample every 2sec, 1sec -> sample every 1sec 
-
 local function shSampleMultiplier(periodMs)
   if periodMs <= SH_RATE_MIN_PERIOD_MS then
     return 1.0
   elseif periodMs >= SH_RATE_MAX_PERIOD_MS then
     return SH_RATE_MAX_MULT
   end
-
-  local t = (periodMs - SH_RATE_MIN_PERIOD_MS)
-          / (SH_RATE_MAX_PERIOD_MS - SH_RATE_MIN_PERIOD_MS)
-
+  local t =
+    (periodMs - SH_RATE_MIN_PERIOD_MS)
+    / (SH_RATE_MAX_PERIOD_MS - SH_RATE_MIN_PERIOD_MS)
   return 1.0 + t * (SH_RATE_MAX_MULT - 1.0)
 end
 
--- ---------------- correlated random sampling with Bézier-like interpolation and wave folding ----------------
---
--- a smooth Bezier curve used to interpolate between S&H points
 local function smoothBezier(t)
   return t * t * (3 - 2 * t)
 end
 
--- Select a nearby random target.
--- math.random() + math.random() - 1 creates a triangular distribution centered around zero. Small movements are more likely than large movements.
+-- ---------------- Waveform value calculation ----------------
+
+local function sineMacroValue()
+  local sineBipolar =  -math.cos(macroLfo.phase * 2 * math.pi)
+  local center = (macroLfo.minValue + macroLfo.maxValue) / 2
+  local halfRange = (macroLfo.maxValue - macroLfo.minValue) / 2
+  local value = center + sineBipolar * halfRange * macroLfo.amplitude
+  return math.floor(value + 0.5)
+end
+
+local function sampleAndHoldMacroValue()
+  local heldBipolar = (macroLfo.heldRandom * 2) - 1
+  local center = (macroLfo.minValue + macroLfo.maxValue) / 2
+  local halfRange = (macroLfo.maxValue - macroLfo.minValue) / 2
+  local value = center + heldBipolar * halfRange * macroLfo.amplitude
+  return math.floor(value + 0.5)
+end
+
+local function currentMacroLfoValue()
+  if macroLfo.waveform == MACRO_LFO_SH then
+    return sampleAndHoldMacroValue()
+  end
+  return sineMacroValue()
+end
+
+-- ---------------- S&H motion ----------------
+
 local function chooseNextSampleAndHoldTarget()
   macroLfo.shFromValue = macroLfo.heldRandom
- 
-  local signedRandom = math.random() + math.random() - 1
- 
+  local signedRandom =
+    math.random() + math.random() - 1
   local newTarget =
     macroLfo.shFromValue
     + signedRandom * MACRO_LFO_SH_MAX_STEP
- 
-  -- If the raw target overshoots 0 or 1, the glide path must actually visit that boundary before bouncing back, rather than cutting straight to the
-  -- final folded value. shBoundary records that waypoint (nil = no fold, direct glide from -> to).
   if newTarget > 1 then
     local overshoot = newTarget - 1
     macroLfo.shBoundary = 1
@@ -1024,122 +945,157 @@ local function chooseNextSampleAndHoldTarget()
     macroLfo.shBoundary = nil
     macroLfo.shToValue = newTarget
   end
- end
+end
 
 local function updateSampleAndHoldGlide()
-  local glideFraction = MACRO_LFO_SH_GLIDE_FRACTION
-
+  local glideFraction =
+    MACRO_LFO_SH_GLIDE_FRACTION
   if glideFraction <= 0 then
     macroLfo.heldRandom = macroLfo.shToValue
     return
   end
-
-  -- Once the glide portion is complete, hold the target.
   if macroLfo.shPhase >= glideFraction then
     macroLfo.heldRandom = macroLfo.shToValue
     return
   end
- 
-  -- Interpolate from the previous value to the new target using a Bezier curve instead of linear.
   local glidePosition = clamp01(macroLfo.shPhase / glideFraction)
-
   if macroLfo.shBoundary == nil then
-    -- Direct glide from -> to using a Bezier curve instead of linear.
     local eased = smoothBezier(glidePosition)
     macroLfo.heldRandom =
       macroLfo.shFromValue
       + (macroLfo.shToValue - macroLfo.shFromValue) * eased
+    return
+  end
+  local d1 = math.abs(macroLfo.shBoundary - macroLfo.shFromValue)
+  local d2 = math.abs(macroLfo.shToValue - macroLfo.shBoundary)
+  local total = d1 + d2
+  local splitPoint =
+    (total > 0) and (d1 / total) or 0.5
+  if glidePosition < splitPoint then
+    local localT =
+      (splitPoint > 0)
+      and (glidePosition / splitPoint)
+      or 1
+    local eased = smoothBezier(localT)
+    macroLfo.heldRandom = macroLfo.shFromValue + (macroLfo.shBoundary - macroLfo.shFromValue) * eased
   else
-    -- Two-segment glide: from -> boundary -> to, so the path visibly reaches the boundary before bouncing back.
-    local d1 = math.abs(macroLfo.shBoundary - macroLfo.shFromValue)
-    local d2 = math.abs(macroLfo.shToValue - macroLfo.shBoundary)
-    local total = d1 + d2
-    local splitPoint = (total > 0) and (d1 / total) or 0.5
-
-    if glidePosition < splitPoint then
-      local localT = (splitPoint > 0) and (glidePosition / splitPoint) or 1
-      local eased = smoothBezier(localT)
-      macroLfo.heldRandom =
-        macroLfo.shFromValue
-        + (macroLfo.shBoundary - macroLfo.shFromValue) * eased
-    else
-      local remaining = 1 - splitPoint
-      local localT = (remaining > 0) and ((glidePosition - splitPoint) / remaining) or 1
-      local eased = smoothBezier(localT)
-      macroLfo.heldRandom =
-        macroLfo.shBoundary
-        + (macroLfo.shToValue - macroLfo.shBoundary) * eased
-    end
+    local remaining = 1 - splitPoint
+    local localT =
+      (remaining > 0)
+      and ((glidePosition - splitPoint) / remaining)
+      or 1
+    local eased = smoothBezier(localT)
+    macroLfo.heldRandom = macroLfo.shBoundary + (macroLfo.shToValue - macroLfo.shBoundary) * eased
   end
 end
 
--- ---------------- Apply current LFO value ----------------
---
+-- ---------------- Macro LFO modulation helpers ----------------
+
+local function captureLfoMapBaseline()
+  for i = 1, 16 do
+    lfoMapBaseline[i] =
+      parameterMap.get(
+        deviceId,
+        PT_VIRTUAL,
+        PARAM_MOD_AMOUNT[i]
+      ) or 64
+  end
+  lfoBaselineValid = true
+end
+
+local function clearLfoMapBaseline()
+  lfoBaselineValid = false
+  for i = 1, 16 do
+    lfoMapBaseline[i] = 64
+  end
+end
+
 local function applyCurrentMacroLfoValue()
   if comparingActive then
     return
   end
-
   local value = currentMacroLfoValue()
-
   macroKnobValue = value
-
-  -- Keep the virtual macro control/UI synchronized.
   parameterMap.set(
     deviceId,
     PT_VIRTUAL,
     PARAM_MACRO_KNOB,
     value
   )
-
-  -- Timer updates do not necessarily invoke the normal
-  -- macro-control processing path.
   applyMacroToAll()
 end
 
--------------- LFO Scope Global variables ----------------------------------
---
-local SCOPE_WIDTH = 314
-local SCOPE_HEIGHT = 140
-local CTRL_LFO_SCOPE = 328
+-- ---------------- Macro LFO scope helpers ----------------
 
--- Shortcut for graphics object
-local g = graphics
-
--- The Scope control
-local scopeControl = controls.get(CTRL_LFO_SCOPE)
-
--- Scope buffer (one sample per pixel column)
-local scope = {
-    y = {},
-}
-
-local scopeRepaintDiv = 3   -- 2 => repaint every 100ms, 3 => 150ms
-local scopeRepaintCount = 0
-
--- map current macro value into normalized [-1, 1]
-local function macroValueToNorm(v)
-  local minV = macroLfo.minValue
-  local maxV = macroLfo.maxValue
-  local range = maxV - minV
-  if range <= 0 then return 0 end
-
-  local u = (v - minV) / range   -- 0..1
-  if u < 0 then u = 0 elseif u > 1 then u = 1 end
-  return (u * 2) - 1             -- -1..1
+local function macroValueToNorm(value)
+  local range =
+    macroLfo.maxValue - macroLfo.minValue
+  if range <= 0 then
+    return 0
+  end
+  local normalized = (value - macroLfo.minValue) / range
+  normalized = clamp01(normalized)
+  return (normalized * 2) - 1
 end
 
-function setAmplitude(valueObject, value)   -- value is 0..100
-    macroLfo.amplitude = (value or 100) / 100
+function initializeScopeData()
+  for i = 1, SCOPE_WIDTH do
+    scope.y[i] = 0
+  end
 end
 
--- ---------------- Start/stop/tick ----------------
---
+-- ---------------- Macro LFO scheduler ----------------
+
+local macroLfoHandle = nil
+
+local function stopMacroLfoScheduler()
+  if macroLfoHandle ~= nil then
+    schedule.cancel(macroLfoHandle)
+    macroLfoHandle = nil
+  end
+end
+
+local function macroLfoStep()
+  if not macroLfo.isRunning or comparingActive then
+    return
+  end
+  macroLfo.phase = macroLfo.phase + macroLfo.stepMs / macroLfo.periodMs
+
+  if macroLfo.phase >= 1 then
+    macroLfo.phase = macroLfo.phase - 1
+  end
+  if macroLfo.waveform == MACRO_LFO_SH then
+    local shPeriodMs = macroLfo.periodMs / shSampleMultiplier(macroLfo.periodMs)
+    macroLfo.shPhase = macroLfo.shPhase + macroLfo.stepMs / shPeriodMs
+    if macroLfo.shPhase >= 1 then
+      macroLfo.shPhase = macroLfo.shPhase - 1
+      chooseNextSampleAndHoldTarget()
+    end
+    updateSampleAndHoldGlide()
+  end
+  applyCurrentMacroLfoValue()
+  for i = 1, SCOPE_WIDTH - 1 do
+    scope.y[i] = scope.y[i + 1]
+  end
+  scope.y[SCOPE_WIDTH] =
+    macroValueToNorm(currentMacroLfoValue())
+  scopeRepaintCount =
+    scopeRepaintCount + 1
+  if scopeRepaintCount >= scopeRepaintDiv then
+    scopeRepaintCount = 0
+    scopeControl:repaint()
+  end
+end
+
+local function startMacroLfoScheduler()
+  stopMacroLfoScheduler()
+  macroLfoHandle = schedule.every(macroLfo.stepMs, macroLfoStep)
+end
+
+-- ---------------- Macro LFO lifecycle ----------------
+
 local function stopMacroLfo()
   macroLfo.isRunning = false
-
-  -- Remove all temporary modulation and return each parameter to its stored
-  -- Parameter Map value. No Parameter Map writes are performed here.
   if lfoBaselineValid then
     for i = 1, 16 do
       if modAmountBase[i] ~= 64 then
@@ -1153,10 +1109,8 @@ local function stopMacroLfo()
       end
     end
   end
-
   clearLfoMapBaseline()
-  timer.disable()
-
+  stopMacroLfoScheduler()
   print("Macro LFO stopped")
 end
 
@@ -1164,55 +1118,13 @@ local function resumeMacroLfo()
   if macroLfo.isRunning then
     return
   end
-
+  if not lfoBaselineValid then
+    captureLfoMapBaseline()
+  end
   macroLfo.isRunning = true
-  timer.setPeriod(macroLfo.stepMs)
-  timer.enable()
+  startMacroLfoScheduler()
   applyCurrentMacroLfoValue()
   print("Macro LFO resumed")
-end
-
-local function macroLfoTick()
-  if not macroLfo.isRunning then
-    return
-  end
-  -- Hold the LFO while COMPARE_IT is showing snapshot A.
-  if comparingActive then
-    return
-  end
-
-  macroLfo.phase =
-    macroLfo.phase
-    + macroLfo.stepMs / macroLfo.periodMs
-
-  if macroLfo.phase >= 1 then
-    macroLfo.phase = macroLfo.phase - 1
-  end
-
-  if macroLfo.waveform == MACRO_LFO_SH then
-    -- At the start of each cycle, choose a nearby new target.
-    local shPeriodMs =
-      macroLfo.periodMs / shSampleMultiplier(macroLfo.periodMs)
-
-    macroLfo.shPhase =
-      macroLfo.shPhase
-      + macroLfo.stepMs / shPeriodMs
-
-    local shWrapped = false
-    if macroLfo.shPhase >= 1 then
-      macroLfo.shPhase = macroLfo.shPhase - 1
-      shWrapped = true
-    end
-
-    if shWrapped then
-      chooseNextSampleAndHoldTarget()
-    end
-
-    -- Glide toward the target, then hold it.
-    updateSampleAndHoldGlide()
-  end
-
-  applyCurrentMacroLfoValue()
 end
 
 local function setMacroLfoRange(mode)
@@ -1220,76 +1132,34 @@ local function setMacroLfoRange(mode)
       and mode ~= MACRO_LFO_BIPOLAR then
     mode = MACRO_LFO_UNIPOLAR
   end
-
   macroLfo.mode = mode
   macroLfo.maxValue = MACRO_MAX
-
-  if mode == MACRO_LFO_UNIPOLAR then
-    -- 100% down to 0%
-    macroLfo.minValue = MACRO_CENTER
-  else
-    -- 100% down to -100%
-    macroLfo.minValue = 0
-  end
-
+  macroLfo.minValue =
+    (mode == MACRO_LFO_UNIPOLAR)
+    and MACRO_CENTER
+    or 0
   print("Macro LFO range set (mode " .. tostring(mode) .. ")")
 end
 
 function startMacroLfo(mode)
   setMacroLfoRange(mode)
-
   if macroLfo.isRunning then
-    -- Mode changed while running. Keep the current phase and baseline.
     applyCurrentMacroLfoValue()
     return
   end
-
-  -- Capture the currently stored, non-modulated values before the first
-  -- temporary LFO modulation is sent.
   captureLfoMapBaseline()
-
   macroLfo.isRunning = true
-
-  -- Start at the maximum macro value.
   macroLfo.phase = 0.5
-
-  -- Start S&H at maximum as well.
   macroLfo.heldRandom = 1.0
   macroLfo.shFromValue = 1.0
   macroLfo.shToValue = 1.0
-
-  timer.setPeriod(macroLfo.stepMs)
-  timer.enable()
-
-  -- Apply the initial LFO value immediately.
+  startMacroLfoScheduler()
   applyCurrentMacroLfoValue()
-
   print("Starting macro LFO")
 end
 
-function timer.onTick()
-  if not macroLfo then return end
-  if macroLfo.isRunning then
-    macroLfoTick()
-  end
+-- ---------------- Macro LFO UI callbacks ----------------
 
-  for i = 1, SCOPE_WIDTH - 1 do
-    scope.y[i] = scope.y[i + 1]
-  end
-
-  -- scope: draw what is actually output by current waveform/range
-  local v = currentMacroLfoValue()
-  scope.y[SCOPE_WIDTH] = macroValueToNorm(v)
-
-  scopeRepaintCount = scopeRepaintCount + 1
-  if scopeRepaintCount >= scopeRepaintDiv then
-    scopeRepaintCount = 0
-    scopeControl:repaint()
-  end
-end
-
--- ---------------- Macro LFO rate control ----------------
---
 local LFO_RATE_MIN_MS = 300
 local LFO_RATE_MAX_MS = 20000
 
@@ -1298,106 +1168,91 @@ local function lfoRateToPeriodMs(value)
   local t = value / 255
   local logMin = math.log(LFO_RATE_MIN_MS)
   local logMax = math.log(LFO_RATE_MAX_MS)
-
   -- 0 = slowest, 255 = fastest
   local logPeriod = logMax + (logMin - logMax) * t
-
   return math.floor(math.exp(logPeriod) + 0.5)
 end
 
--- update periodMs whenever the speed value is changed
+function setAmplitude(valueObject, value)
+  macroLfo.amplitude = (value or 100) / 100
+end
+
 function lfoRateChange(valueObject, value)
   macroLfo.periodMs = lfoRateToPeriodMs(value)
-  print(string.format( "Macro LFO period set to %d ms", macroLfo.periodMs ))
+  print(string.format(
+    "Macro LFO period set to %d ms",
+    macroLfo.periodMs
+  ))
 end
 
--- formatter for the speed control
 function displayLfoRate(valueObject, value)
   local periodMs = lfoRateToPeriodMs(value)
-  -- Get the current waveform to know which label to show
-  local waveformParam = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MACRO_LFO_WAVE) or MACRO_LFO_SINE
+  local waveformParam = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MACRO_LFO_WAVE ) or MACRO_LFO_SINE
   if waveformParam == MACRO_LFO_SH then
-    -- For Smooth Random, show the effective sampling interval per target
-    local shPeriodMs = periodMs / shSampleMultiplier(periodMs)
-
+    local shPeriodMs =
+      periodMs / shSampleMultiplier(periodMs)
     if shPeriodMs >= 1000 then
-      return string.format("%.1f s/step", shPeriodMs / 1000)
-    else
-      return string.format("%d ms/step", math.floor(shPeriodMs + 0.5))
+      return string.format( "%.1f s/step", shPeriodMs / 1000  )
     end
+    return string.format( "%d ms/step", math.floor(shPeriodMs + 0.5) )
   end
-  -- Sine: an honest cycle period
   if periodMs >= 1000 then
     return string.format("%.1f s", periodMs / 1000)
-  else
-    return string.format("%d ms", periodMs)
   end
+  return string.format("%d ms", periodMs)
 end
 
--- ---------------- Macro LFO waveform control ----------------
---
 function macroLfoWaveChange(valueObject, value)
   if value ~= MACRO_LFO_SINE
       and value ~= MACRO_LFO_SH then
     value = MACRO_LFO_SINE
   end
-
   -- When switching to S&H, preserve the current output value.
-  if value == MACRO_LFO_SH
-      and macroLfo.waveform ~= MACRO_LFO_SH then
-
+  if value == MACRO_LFO_SH and macroLfo.waveform ~= MACRO_LFO_SH then
     local currentValue = sineMacroValue()
     local range = macroLfo.maxValue - macroLfo.minValue
     local normalized = 1.0
-
     if range > 0 then
       normalized = (currentValue - macroLfo.minValue) / range
     end
-
     normalized = clamp01(normalized)
-
     macroLfo.heldRandom = normalized
     macroLfo.shFromValue = normalized
     macroLfo.shToValue = normalized
-
     -- Select a new target on the next timer tick.
     macroLfo.shPhase = 1.0
   end
-
   -- When switching to Sine, preserve the current output value.
-  if value == MACRO_LFO_SINE
-      and macroLfo.waveform ~= MACRO_LFO_SINE then
-
+  if value == MACRO_LFO_SINE and macroLfo.waveform ~= MACRO_LFO_SINE then
     local currentValue = sampleAndHoldMacroValue()
     local range = macroLfo.maxValue - macroLfo.minValue
     local normalized = 1.0
-
     if range > 0 then
       normalized = (currentValue - macroLfo.minValue) / range
     end
-
     normalized = clamp01(normalized)
-
     -- Sine (unipolar, peak at phase 0.5) rises from 0->1 over phase 0->0.5.
     -- acos maps normalized value back to a phase on the rising edge.
     macroLfo.phase = math.acos(1 - 2 * normalized) / (2 * math.pi)
   end
-
   macroLfo.waveform = value
   applyCurrentMacroLfoValue()
-
   -- Force displayLfoRate to re-run by triggering a parameter change event.
   -- Increment by 1, then immediately set back to the original value.
   local currentRateValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_LFO_RATE) or 0
-  parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue + 1)
+  local bump = math.min(255, currentRateValue + 1)
+  if bump ~= currentRateValue then
+    parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, bump)
+  end
   parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue)
+--  parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue + 1)
+--  parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue)
   -- Immediately restore without waiting for lfoRateChange to re-run
   macroLfo.periodMs = lfoRateToPeriodMs(currentRateValue)
-
   print("Macro LFO waveform changed")
 end
 
--------------- A callback to draw the XY pad graphics -----------------------
+-- A callback to draw the XY pad graphics
 --
 function paintScope(control, value)
     local bounds = control:getBounds()
@@ -1405,31 +1260,23 @@ function paintScope(control, value)
     local right  = bounds[WIDTH] - 1
     local top    = 0
     local bottom = bounds[HEIGHT] - 1
-
     -- Clear the Control's bounding box
     g.setColor(0x0000)
     g.fillRect(0, 0, bounds[WIDTH], bounds[HEIGHT])
     g.setColor(0xffff)
     g.drawRoundRect(0, 0, bounds[WIDTH], bounds[HEIGHT], 5)
-
     -- midline
-    g.setColor(0x7bef)
+    g.setColor(0x7bef) -- light gray
     local mid = normToPixel(0, top + 4, bottom - 4)
     g.drawLine(left + 4, mid, right - 4, mid)
-
     -- signal trace
     g.setColor(0xffff)
-    local maxSamples = math.min(SCOPE_WIDTH, (right - left - 7))
-    if maxSamples < 2 then return end
-
     local lastx = left + 4
-    local lasty = normToPixel(scope.y[1] or 0, top + 4, bottom - 4)
-
-    for i = 2, maxSamples do
-        local px = left + 3 + i   -- maps i=2 -> x=5 etc
-        local py = normToPixel(scope.y[i] or 0, top + 4, bottom - 4)
-        g.drawLine(lastx, lasty, px, py)
-        lastx, lasty = px, py
+    local lasty = normToPixel(scope.y[1], top + 4, bottom - 4)
+    for x = 2, math.min(SCOPE_WIDTH - 4, right - 4) do
+        local y = normToPixel(scope.y[x], top + 4, bottom - 4)
+        g.drawLine(lastx, lasty, x, y)
+        lastx, lasty = x, y
     end
 end
 
@@ -1438,11 +1285,6 @@ function normToPixel(n, top, bottom)
     local center = (top + bottom) * 0.5
     local amp    = (bottom - top) * 0.5
     return math.floor(center - n * amp + 0.5)
-end
-
--- Zero the scope data
-function initializeScopeData()
-    for i = 1, SCOPE_WIDTH do scope.y[i] = 0 end
 end
 
 -- ------------------ COMPARE_IT toggle block -----------------------------------
@@ -1564,7 +1406,10 @@ local function captureLiveAsB()
     if not PATCH_PARAM_IS_MOD_AMOUNT[i] then
       local parType = PATCH_PARAM_MAP[i][2] % 10
       local parNum  = PATCH_PARAM_MAP[i][3]
-      snap[i] = parameterMap.get(deviceId, parType, parNum)
+      local v = parameterMap.get(deviceId, parType, parNum)
+      if v ~= MIDI_VALUE_DO_NOT_SEND then
+        snap[i] = v
+      end
     end
   end
   return snap
