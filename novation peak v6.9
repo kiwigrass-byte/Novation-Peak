@@ -763,8 +763,9 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
   for i = 1, 16 do
     -- Skip slots with no modulation amount set — scaling has no effect.
     if modAmountBase[i] ~= 64 then
-      local lockValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i]) or 0
-      local isLocked = (lockValue ~= 0)
+--      local lockValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i]) or 0
+--      local isLocked = (lockValue ~= 0)
+      local isLocked = modAmountLocked[i] 
       if ignoreLocks or not isLocked then
         local newValue = scaledAmount(modAmountBase[i], factor)
         local current = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i])
@@ -779,6 +780,17 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
  -- Baseline lifecycle is managed explicitly by LFO start/resume/stop
  -- and compare transitions. Do not auto-clear it here.
   macroApplying = false
+end
+
+local function syncLockStateFromParams()
+  for i = 1, 16 do
+    local v = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i]) or 0
+    modAmountLocked[i] = (v ~= 0)
+    local ctrl = controls.get(CTRL_MOD_LOCK[i])
+    if ctrl then
+      ctrl:setColor(modAmountLocked[i] and lockColors.on or lockColors.off)
+    end
+  end
 end
 
 -- ============================================================
@@ -991,13 +1003,16 @@ local function clearLfoMapBaseline()
   end
 end
 
-local function applyCurrentLfoValue()
-  if comparingActive then
-    return
-  end
-  local value = currentLfoValue()
+local lastLfoValue = nil
+
+local function applyCurrentLfoValue(valueOverride)
+  if comparingActive then return end
+  local value = valueOverride or currentLfoValue()
   macroKnobValue = value
-  parameterMap.set( deviceId, PT_VIRTUAL, PARAM_KNOB, value )
+  if value ~= lastLfoValue then
+    parameterMap.set(deviceId, PT_VIRTUAL, PARAM_KNOB, value)
+    lastLfoValue = value
+  end
   applyMacroToAll()
 end
 
@@ -1037,7 +1052,7 @@ local function lfoStep()
   end
   lfo.phase = lfo.phase + lfo.stepMs / lfo.periodMs
 
-  if lfo.phase >= 1 then
+  while lfo.phase >= 1 do
     lfo.phase = lfo.phase - 1
   end
   if lfo.waveform == LFO_SH then
@@ -1049,17 +1064,18 @@ local function lfoStep()
     end
     updateSampleAndHoldGlide()
   end
-  applyCurrentLfoValue()
+  local value = currentLfoValue()
+  applyCurrentLfoValue(value)
   for i = 1, SCOPE_WIDTH - 1 do
     scope.y[i] = scope.y[i + 1]
   end
-  scope.y[SCOPE_WIDTH] =
-    macroValueToNorm(currentLfoValue())
-  scopeRepaintCount =
-    scopeRepaintCount + 1
+  scope.y[SCOPE_WIDTH] = macroValueToNorm(value)
+  scopeRepaintCount = scopeRepaintCount + 1
   if scopeRepaintCount >= scopeRepaintDiv then
     scopeRepaintCount = 0
-    scopeControl:repaint()
+    if scopeControl then
+      scopeControl:repaint()
+    end
   end
 end
 
@@ -1727,6 +1743,7 @@ function preset.onLoad()
   initializeScopeData();
   scopeControl:setPaintCallback(paintScope)
   scopeControl:repaint()
+  syncLockStateFromParams()
 end
 
 -- request Peak wavetable names and global settings after preset is loaded
