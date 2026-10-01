@@ -822,7 +822,7 @@ local lfo = {
   isRunning = false,
   phase = 0.5,
   shPhase = 0.5,
-  periodMs = 4000,
+  periodMs = 20000,
   stepMs = 50,
   mode = LFO_UNIPOLAR,
   waveform = LFO_SINE,
@@ -1462,7 +1462,7 @@ local function resetVirtualParams()
   lfo.waveform    = LFO_SINE
   lfo.phase       = 0.5
   lfo.shPhase     = 0.5
-  lfo.periodMs    = 4000      -- match your intended default rate
+  lfo.periodMs    = lfoRateToPeriodMs(0)      
   lfo.stepMs      = 50
   lfo.amplitude   = 1.0
   lfo.minValue    = CENTER_KNOB
@@ -1689,6 +1689,16 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
   -- Macro LFO waveform: (0 = sine, 1 = sample and hold
   if pType == PT_VIRTUAL and pNum == PARAM_LFO_WAVE then
     lfoWaveChange(valueObjects[1], midiValue)
+    return
+  end
+  -- Macro LFO rate
+  if pType == PT_VIRTUAL and pNum == PARAM_LFO_RATE then
+    lfoRateChange(valueObjects[1], midiValue)
+    return
+  end
+  -- Macro LFO amplitude
+  if pType == PT_VIRTUAL and pNum == PARAM_LFO_AMOUNT then
+    setAmplitude(valueObjects[1], midiValue)
     return
   end
   -- Macro knob moved: rescale all 16 amounts from their bases, don't NRPN the macro itself
