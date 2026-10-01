@@ -1676,6 +1676,7 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     print("New MIDI Channel assigned by preset: "..math.floor(midiChannel))
     assignChannel(nil,1)         -- should set device channel
   end  
+
   -- Other INTERNAL only UI actions with purely virtual parameters
   -- Macro LFO enable toggle (0 = off, 1 = unipolar, 2 = bipolar)
   if pType == PT_VIRTUAL and pNum == PARAM_LFO then
@@ -1686,21 +1687,7 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     end
     return
   end
-  -- Macro LFO waveform: (0 = sine, 1 = sample and hold
-  if pType == PT_VIRTUAL and pNum == PARAM_LFO_WAVE then
-    lfoWaveChange(valueObjects[1], midiValue)
-    return
-  end
-  -- Macro LFO rate
-  if pType == PT_VIRTUAL and pNum == PARAM_LFO_RATE then
-    lfoRateChange(valueObjects[1], midiValue)
-    return
-  end
-  -- Macro LFO amplitude
-  if pType == PT_VIRTUAL and pNum == PARAM_LFO_AMOUNT then
-    setAmplitude(valueObjects[1], midiValue)
-    return
-  end
+
   -- Macro knob moved: rescale all 16 amounts from their bases, don't NRPN the macro itself
   if pType == PT_VIRTUAL and pNum == PARAM_KNOB then
     macroKnobValue = math.max(0, math.min(MAX_KNOB, midiValue))
