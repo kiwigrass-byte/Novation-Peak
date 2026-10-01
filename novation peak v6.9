@@ -763,8 +763,6 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
   for i = 1, 16 do
     -- Skip slots with no modulation amount set — scaling has no effect.
     if modAmountBase[i] ~= 64 then
---      local lockValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i]) or 0
---      local isLocked = (lockValue ~= 0)
       local isLocked = modAmountLocked[i] 
       if ignoreLocks or not isLocked then
         local newValue = scaledAmount(modAmountBase[i], factor)
@@ -1246,29 +1244,29 @@ local function normToPixel(n, top, bottom)
 end
 
 function paintScope(control, value)
-  local bounds = control:getBounds()
-  local left   = 0
-  local right  = bounds[WIDTH] - 1
-  local top    = 0
-  local bottom = bounds[HEIGHT] - 1
-  -- Clear the Control's bounding box
-  g.setColor(0x0000)
-  g.fillRect(0, 0, bounds[WIDTH], bounds[HEIGHT])
-  g.setColor(0xffff)
-  g.drawRoundRect(0, 0, bounds[WIDTH], bounds[HEIGHT], 5)
-  -- midline
-  g.setColor(0x7bef) -- light gray
-  local mid = normToPixel(0, top + 4, bottom - 4)
-  g.drawLine(left + 4, mid, right - 4, mid)
-  -- signal trace
-  g.setColor(0xffff)
-  local lastx = left + 4
-  local lasty = normToPixel(scope.y[1], top + 4, bottom - 4)
-  for x = 2, math.min(SCOPE_WIDTH - 4, right - 4) do
-      local y = normToPixel(scope.y[x], top + 4, bottom - 4)
-      g.drawLine(lastx, lasty, x, y)
-      lastx, lasty = x, y
-  end
+    local bounds = control:getBounds()
+    local left   = 0
+    local right  = bounds[WIDTH] - 1
+    local top    = 0
+    local bottom = bounds[HEIGHT] - 1
+    -- Clear the Control's bounding box
+    g.setColor(0x000000)
+    g.fillRect(0, 0, bounds[WIDTH], bounds[HEIGHT])
+    g.setColor(0x808080) -- mid gray
+    g.drawRoundRect(0, 0, bounds[WIDTH], bounds[HEIGHT], 5)
+    -- midline
+    g.setColor(0x808080)
+    local mid = normToPixel(0, top + 4, bottom - 4)
+    g.drawLine(left + 4, mid, right - 4, mid)
+    -- signal trace
+    g.setColor(ORANGE)
+    local lastx = left + 4
+    local lasty = normToPixel(scope.y[1], top + 4, bottom - 4)
+    for x = 2, math.min(SCOPE_WIDTH - 4, right - 4) do
+        local y = normToPixel(scope.y[x], top + 4, bottom - 4)
+        g.drawLine(lastx, lasty, x, y)
+        lastx, lasty = x, y
+    end
 end
 
 -- ------------------ COMPARE_IT toggle block -----------------------------------
