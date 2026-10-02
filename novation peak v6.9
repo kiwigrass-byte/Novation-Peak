@@ -780,6 +780,7 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
   macroApplying = false
 end
 
+-- not used
 local function syncLockStateFromParams()
   for i = 1, 16 do
     local v = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i]) or 0
@@ -1163,10 +1164,7 @@ end
 
 function lfoRateChange(valueObject, value)
   lfo.periodMs = lfoRateToPeriodMs(value)
-  print(string.format(
-    "Macro LFO period set to %d ms",
-    lfo.periodMs
-  ))
+  print(string.format( "Macro LFO period set to %d ms", lfo.periodMs ))
 end
 
 function displayLfoRate(valueObject, value)
@@ -1784,7 +1782,8 @@ function preset.onLoad()
   initializeScopeData();
   scopeControl:setPaintCallback(paintScope)
   scopeControl:repaint()
---  syncLockStateFromParams()
+
+--  syncLockStateFromParams() -- not really need since lockToggle is bound to lock params via value function
 end
 
 -- request Peak wavetable names and global settings after preset is loaded
