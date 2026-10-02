@@ -1096,7 +1096,7 @@ local function stopLfo()
   end
   clearLfoMapBaseline()
   stopLfoScheduler()
-  print("Macro LFO stopped")
+--  print("Macro LFO stopped")
 end
 
 local function resumeLfo()
@@ -1109,7 +1109,7 @@ local function resumeLfo()
   lfo.isRunning = true
   startLfoScheduler()
   applyCurrentLfoValue()
-  print("Macro LFO resumed")
+--  print("Macro LFO resumed")
 end
 
 local function setLfoRange(mode)
@@ -1123,7 +1123,7 @@ local function setLfoRange(mode)
     (mode == LFO_UNIPOLAR)
     and CENTER_KNOB
     or 0
-  print("Macro LFO range set (mode " .. tostring(mode) .. ")")
+--  print("Macro LFO range set (mode " .. tostring(mode) .. ")")
 end
 
 function startLfo(mode)
@@ -1140,7 +1140,7 @@ function startLfo(mode)
   lfo.shToValue = 1.0
   startLfoScheduler()
   applyCurrentLfoValue()
-  print("Starting macro LFO")
+--  print("Starting macro LFO")
 end
 
 -- ---------------- Macro LFO UI callbacks ----------------
@@ -1164,7 +1164,60 @@ end
 
 function lfoRateChange(valueObject, value)
   lfo.periodMs = lfoRateToPeriodMs(value)
-  print(string.format( "Macro LFO period set to %d ms", lfo.periodMs ))
+end
+
+-- Force the built-in rate control to recompute its display after waveform changes.
+local function refreshLfoRateDisplay()
+  local currentRateValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_LFO_RATE) or 0
+  local bump = math.min(255, currentRateValue + 1)
+
+  -- Force the built-in rate control to refresh its display text.
+  if bump ~= currentRateValue then
+    parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, bump)
+  end
+  parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue)
+
+  -- Keep runtime state aligned with the restored parameter value.
+  lfo.periodMs = lfoRateToPeriodMs(currentRateValue)
+end
+
+function lfoWaveChange(valueObject, value)
+  if value ~= LFO_SINE and value ~= LFO_SH then
+    value = LFO_SINE
+  end
+
+  -- When switching to S&H, preserve the current output value.
+  if value == LFO_SH and lfo.waveform ~= LFO_SH then
+    local currentValue = sineMacroValue()
+    local range = lfo.maxValue - lfo.minValue
+    local normalized = 1.0
+    if range > 0 then
+      normalized = (currentValue - lfo.minValue) / range
+    end
+    normalized = clamp01(normalized)
+    lfo.heldRandom = normalized
+    lfo.shFromValue = normalized
+    lfo.shToValue = normalized
+    lfo.shPhase = 1.0
+  end
+
+  -- When switching to Sine, preserve the current output value.
+  if value == LFO_SINE and lfo.waveform ~= LFO_SINE then
+    local currentValue = sampleAndHoldMacroValue()
+    local range = lfo.maxValue - lfo.minValue
+    local normalized = 1.0
+    if range > 0 then
+      normalized = (currentValue - lfo.minValue) / range
+    end
+    normalized = clamp01(normalized)
+    lfo.phase = math.acos(1 - 2 * normalized) / (2 * math.pi)
+  end
+
+  lfo.waveform = value
+  applyCurrentLfoValue()
+
+  -- Refresh the built-in speed display after waveform-dependent formatting changes.
+  refreshLfoRateDisplay()
 end
 
 function displayLfoRate(valueObject, value)
@@ -1182,54 +1235,6 @@ function displayLfoRate(valueObject, value)
     return string.format("%.1f s", periodMs / 1000)
   end
   return string.format("%d ms", periodMs)
-end
-
-function lfoWaveChange(valueObject, value)
-  if value ~= LFO_SINE
-      and value ~= LFO_SH then
-    value = LFO_SINE
-  end
-  -- When switching to S&H, preserve the current output value.
-  if value == LFO_SH and lfo.waveform ~= LFO_SH then
-    local currentValue = sineMacroValue()
-    local range = lfo.maxValue - lfo.minValue
-    local normalized = 1.0
-    if range > 0 then
-      normalized = (currentValue - lfo.minValue) / range
-    end
-    normalized = clamp01(normalized)
-    lfo.heldRandom = normalized
-    lfo.shFromValue = normalized
-    lfo.shToValue = normalized
-    -- Select a new target on the next timer tick.
-    lfo.shPhase = 1.0
-  end
-  -- When switching to Sine, preserve the current output value.
-  if value == LFO_SINE and lfo.waveform ~= LFO_SINE then
-    local currentValue = sampleAndHoldMacroValue()
-    local range = lfo.maxValue - lfo.minValue
-    local normalized = 1.0
-    if range > 0 then
-      normalized = (currentValue - lfo.minValue) / range
-    end
-    normalized = clamp01(normalized)
-    -- Sine (unipolar, peak at phase 0.5) rises from 0->1 over phase 0->0.5.
-    -- acos maps normalized value back to a phase on the rising edge.
-    lfo.phase = math.acos(1 - 2 * normalized) / (2 * math.pi)
-  end
-  lfo.waveform = value
-  applyCurrentLfoValue()
-  -- Force displayLfoRate to re-run by triggering a parameter change event.
-  -- Increment by 1, then immediately set back to the original value.
-  local currentRateValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_LFO_RATE) or 0
-  local bump = math.min(255, currentRateValue + 1)
-  if bump ~= currentRateValue then
-    parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, bump)
-  end
-  parameterMap.set(deviceId, PT_VIRTUAL, PARAM_LFO_RATE, currentRateValue)
-  -- Immediately restore without waiting for lfoRateChange to re-run
-  lfo.periodMs = lfoRateToPeriodMs(currentRateValue)
-  print("Macro LFO waveform changed")
 end
 
 -- A callback to draw the XY pad graphics
