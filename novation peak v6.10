@@ -252,6 +252,8 @@ local CTRL_MOD_SOURCE_A    = {217,219,221,229,231,233,241,243,245,253,255,257,26
 local CTRL_MOD_SOURCE_B    = {218,220,222,230,232,234,242,244,246,254,256,258,266,268,270,278}
 local CTRL_MOD_DEST       = {224,226,228,236,238,240,248,250,252,260,262,264,272,274,276,284}
 local CTRL_MOD_AMOUNT      = {223,225,227,235,237,239,247,249,251,259,261,263,271,273,275,283}
+local CTRL_MOD_AMOUNT_INDEX = {}
+for i, id in ipairs(CTRL_MOD_AMOUNT) do CTRL_MOD_AMOUNT_INDEX[id] = i end
 -- ---------------- FX Mod matrix (4 slots, source triggers) ----------------
 local PARAM_MOD_FX_SOURCE_A = {2176,2304,2432,2560}
 local PARAM_MOD_FX_SOURCE_B = {2177,2305,2433,2561}
@@ -736,17 +738,30 @@ local modAmountLocked = {}
 for i = 1, 16 do modAmountLocked[i] = false end
 
 local lockColors = { off = 0x202020, on = RED }
+local DOUBLE_TAP_WINDOW_MS = 350
+local lastModAmountTapControlId = nil
+local lastModAmountTapTime = nil
+local lastModAmountTapValue = nil
 
--- bound to the 16 lock toggle controls.
+local function setModAmountLock(idx, locked)
+  modAmountLocked[idx] = locked
+  local ctrl = controls.get(CTRL_MOD_LOCK[idx])
+  if ctrl then
+    ctrl:setColor(modAmountLocked[idx] and lockColors.on or lockColors.off)
+  end
+  parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[idx], modAmountLocked[idx] and 1 or 0)
+end
+
+local function toggleModAmountLock(idx)
+  setModAmountLock(idx, not modAmountLocked[idx])
+end
+
+-- Bound to the 16 lock toggle controls.
 function lockToggle(valueObject, value)
   local parameter = valueObject:getMessage():getParameterNumber()
   local idx = PARAM_MOD_LOCK_INDEX[parameter]
   if not idx then return value end
-  modAmountLocked[idx] = (value ~= 0)
-  local ctrl = controls.get(CTRL_MOD_LOCK[idx])
-  if ctrl then
-    ctrl:setColor( modAmountLocked[idx] and lockColors.on or lockColors.off )
-  end
+  setModAmountLock(idx, value ~= 0)
   return value
 end
 
@@ -1750,6 +1765,25 @@ local CTRL_VELOCITY_SHAPE = 358
 local CTRL_RELEASE = {CTRL_CLOCK,CTRL_TRANSPOSE,CTRL_MASTER_TUNE,CTRL_VELOCITY_SHAPE} 
 
 function events.onPotTouchChange(potId, controlId, touched)
+  local modAmountIdx = CTRL_MOD_AMOUNT_INDEX[controlId]
+  if touched == true and modAmountIdx then
+    local now = controller.uptime()
+    local currentValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[modAmountIdx])
+    if currentValue ~= nil
+      and lastModAmountTapControlId == controlId
+      and now - lastModAmountTapTime <= DOUBLE_TAP_WINDOW_MS
+      and currentValue == lastModAmountTapValue then
+      toggleModAmountLock(modAmountIdx)
+      lastModAmountTapControlId = nil
+      lastModAmountTapTime = nil
+      lastModAmountTapValue = nil
+      return
+    end
+    lastModAmountTapControlId = controlId
+    lastModAmountTapTime = now
+    lastModAmountTapValue = currentValue
+  end
+
   local idx = get_key_for_value(CTRL_RELEASE,controlId)
   if (idx == nil) then return end
   if (touched == true) and (activeTouchedControlId ~= controlId) then 
