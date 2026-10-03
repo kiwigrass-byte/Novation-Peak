@@ -12,9 +12,6 @@ local device = devices.get(deviceId)
 local port = device:getPort()
 local channel = device:getChannel()
 
--- events to track
-events.subscribe(PAGES | POTS)
-
 -- Peak-reported channel (source of truth when available)
 local midiChannel = nil
 
@@ -215,7 +212,11 @@ local function makeDimGroup(def)
     local color = dim and cfg.off or cfg.on
     for _, ctrlId in ipairs(self.controlIds[i]) do
       local c = controls.get(ctrlId)
-      if c then c:setColor(color) end
+      if c then
+        local col = color
+        if self.override then col = self.override(i, ctrlId, dim, color) end
+        c:setColor(col)
+      end
     end
   end
 
@@ -252,6 +253,8 @@ local CTRL_MOD_SOURCE_A    = {217,219,221,229,231,233,241,243,245,253,255,257,26
 local CTRL_MOD_SOURCE_B    = {218,220,222,230,232,234,242,244,246,254,256,258,266,268,270,278}
 local CTRL_MOD_DEST       = {224,226,228,236,238,240,248,250,252,260,262,264,272,274,276,284}
 local CTRL_MOD_AMOUNT      = {223,225,227,235,237,239,247,249,251,259,261,263,271,273,275,283}
+local CTRL_MOD_AMOUNT_INDEX = {}
+for i, id in ipairs(CTRL_MOD_AMOUNT) do CTRL_MOD_AMOUNT_INDEX[id] = i end
 -- ---------------- FX Mod matrix (4 slots, source triggers) ----------------
 local PARAM_MOD_FX_SOURCE_A = {2176,2304,2432,2560}
 local PARAM_MOD_FX_SOURCE_B = {2177,2305,2433,2561}
@@ -726,28 +729,28 @@ for i = 1, 16 do modAmountBase[i] = 64 end
 -- the user last set it, regardless of macro position.
 local PARAM_MOD_LOCK = { 10050, 10051, 10052, 10053, 10054, 10055, 10056, 10057,
                       10058, 10059, 10060, 10061,10062, 10063, 10064, 10065, }
-local CTRL_MOD_LOCK = { 399, 400, 401, 402, 403, 404, 405, 406,
-                    407, 408, 414, 415, 416, 417, 420, 421, }
-
-local PARAM_MOD_LOCK_INDEX = {}
-for i, p in ipairs(PARAM_MOD_LOCK) do PARAM_MOD_LOCK_INDEX[p] = i end
 
 local modAmountLocked = {}
 for i = 1, 16 do modAmountLocked[i] = false end
 
 local lockColors = { off = 0x202020, on = RED }
 
--- bound to the 16 lock toggle controls.
-function lockToggle(valueObject, value)
-  local parameter = valueObject:getMessage():getParameterNumber()
-  local idx = PARAM_MOD_LOCK_INDEX[parameter]
-  if not idx then return value end
-  modAmountLocked[idx] = (value ~= 0)
-  local ctrl = controls.get(CTRL_MOD_LOCK[idx])
-  if ctrl then
-    ctrl:setColor( modAmountLocked[idx] and lockColors.on or lockColors.off )
+local function setModAmountLock(idx, locked)
+  modAmountLocked[idx] = locked
+  parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[idx], locked and 1 or 0)
+  modGroup:update(idx) -- refresh color, including red "locked+active" behavior
+end
+
+-- locked + active (not dimmed) => amount control turns red
+modGroup.override = function(i, ctrlId, dim, color)
+  if not dim and modAmountLocked[i] and ctrlId == CTRL_MOD_AMOUNT[i] then
+    return RED
   end
-  return value
+  return color
+end
+
+local function toggleModAmountLock(idx)
+  setModAmountLock(idx, not modAmountLocked[idx])
 end
 
 local function scaledAmount(base, factor)
@@ -778,18 +781,6 @@ local function applyMacroToAll(factorOverride, ignoreLocks)
  -- Baseline lifecycle is managed explicitly by LFO start/resume/stop
  -- and compare transitions. Do not auto-clear it here.
   macroApplying = false
-end
-
--- not used
-local function syncLockStateFromParams()
-  for i = 1, 16 do
-    local v = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i]) or 0
-    modAmountLocked[i] = (v ~= 0)
-    local ctrl = controls.get(CTRL_MOD_LOCK[i])
-    if ctrl then
-      ctrl:setColor(modAmountLocked[i] and lockColors.on or lockColors.off)
-    end
-  end
 end
 
 -- ============================================================
@@ -1487,8 +1478,6 @@ local function resetVirtualParams()
     modAmountBase[i]  = 64
     modAmountLocked[i] = false
     parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i], 0)
-    local ctrl = controls.get(CTRL_MOD_LOCK[i])
-    if ctrl then ctrl:setColor(lockColors.off) end
   end
 
   initializeScopeData()
@@ -1749,7 +1738,33 @@ local CTRL_MASTER_TUNE = 357
 local CTRL_VELOCITY_SHAPE = 358
 local CTRL_RELEASE = {CTRL_CLOCK,CTRL_TRANSPOSE,CTRL_MASTER_TUNE,CTRL_VELOCITY_SHAPE} 
 
+-- short-tap lock toggle state (tap = brief touch with no value change)
+local TAP_MAX_MS = 250
+local tapDownControlId = nil
+local tapDownTime = 0
+local tapDownValue = nil
+
 function events.onPotTouchChange(potId, controlId, touched)
+  -- ===== short tap on a mod amount knob toggles its lock =====
+  local modAmountIdx = CTRL_MOD_AMOUNT_INDEX[controlId]
+  if modAmountIdx then
+    local currentValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[modAmountIdx])
+    if touched == true then
+      tapDownControlId = controlId
+      tapDownTime = controller.uptime()
+      tapDownValue = currentValue
+    elseif tapDownControlId == controlId then
+      if currentValue ~= nil
+        and currentValue == tapDownValue
+        and (controller.uptime() - tapDownTime) <= TAP_MAX_MS then
+        toggleModAmountLock(modAmountIdx)
+      end
+      tapDownControlId = nil
+    end
+    return
+  end
+
+  -- ===== release-send logic for the SysEx controls =====
   local idx = get_key_for_value(CTRL_RELEASE,controlId)
   if (idx == nil) then return end
   if (touched == true) and (activeTouchedControlId ~= controlId) then 
@@ -1761,10 +1776,10 @@ function events.onPotTouchChange(potId, controlId, touched)
     if controlId == CTRL_CLOCK then -- clock
       sysExPatch[237] = math.floor(midiValue/2)
       sysExPatch[238] = 64*(midiValue%2)
-      midi.sendSysex (port, concat(SEND_PATCH_HEADER,sysExPatch)) -- sends the updated patch to the edit buffer of the Peak
+      midi.sendSysex (port, concat(SEND_PATCH_HEADER,sysExPatch))
     elseif controlId == CTRL_TRANSPOSE then
       sysExSettings[16] = midiValue
-      midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings))  -- sends the updated settings to the Peak
+      midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings))
     elseif controlId == CTRL_MASTER_TUNE then
       sysExSettings[15] = midiValue
       midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings)) 
@@ -1777,18 +1792,20 @@ end
 
 -- restore cached patch names, change to performance page, initialize lfo scope when preset loads
 function preset.onLoad()
+  -- load persisted name data if created
   loadNameBank()       
+  -- events to track
+  events.subscribe(PAGES | POTS)
+  -- start on "home" page
   pages.display(12)
+  -- intialize scope
   local bounds = scopeControl:getBounds()
   bounds[WIDTH] = SCOPE_WIDTH
   bounds[HEIGHT] = SCOPE_HEIGHT
   scopeControl:setBounds(bounds)
-  -- Initialize and assign Custom Control callbacks
   initializeScopeData();
   scopeControl:setPaintCallback(paintScope)
   scopeControl:repaint()
-
---  syncLockStateFromParams() -- not really need since lockToggle is bound to lock params via value function
 end
 
 -- request Peak wavetable names and global settings after preset is loaded
