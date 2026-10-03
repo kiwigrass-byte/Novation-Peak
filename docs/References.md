@@ -152,6 +152,14 @@ This creates a two-segment Bezier-interpolated glide that reaches the boundaries
 
 **Implementation:** A new `shBoundary` waypoint field tracks the boundary the glide must pass through, and `updateSampleAndHoldGlide()` splits the glide into two eased segments (from→boundary and boundary→to) when folding occurs.
 
+### Mod Matrix lock workflow update (v6.10)
+
+- Replaced the 16 dedicated Mod Matrix lock controls with **tap-to-toggle locks** directly on each **Mod Amount** knob.
+- A lock toggle only triggers on a short tap/release **without value change**, so normal knob turns won’t accidentally lock/unlock.
+- Added clear lock feedback: **locked + active Mod Amount controls display in red**.
+- Existing touch-release SysEx behavior for Clock/Transpose/Master Tune/Velocity Shape is unchanged.
+- Result: cleaner UI, 16 controls freed, and faster lock workflow at point-of-use.
+
 ### Practical rules
 - Do small chunks of work frequently instead of long blocks.
 - Avoid `helpers.delay()` for waits (it blocks while holding the lock).
