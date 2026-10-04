@@ -26,10 +26,6 @@ end
 local sysExPatch = {}   -- sysExPatch[byte] – store patch data
 local sysExSettings = {} -- sysExSettings[byte] – store settings data
 
--- NRPN reassembly registers
-local msbNum = 0
-local lsbNum = 0
-
 local nameBank = {}    -- to store patch names of each bank
 for y = 1,4 do        -- 1 = bank A, 2= bank B, 3 = bank C, 4 = bank D
     nameBank[y] = {}
@@ -415,6 +411,35 @@ function glide(valueObject, value)
   for i = 1,2 do controls.get(CTRL_GLIDE[i]):setColor(color) end
 end
 
+--------------------------------- MIDI request functions ----------------------------------------------------------
+-- request current patch data from edit buffer without a program change message sent first (if patch selected on Peak rather than E1)
+local function getPatch()
+  midi.sendSysex (port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x40,0x00,0x00,0x00,0x00,0x00}) 
+end
+
+local REQUEST_GAP_MS = 50  -- delay between requests
+
+local function getAllWaveNames()
+  for i = 64, 73 do
+    local delay = (i - 64) * REQUEST_GAP_MS
+    local function request()
+      midi.sendSysex(port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x47, 0x00, 0x00, i, 0x00, 0x00})
+    end
+    if delay == 0 then
+      request()
+    else
+      schedule.after(delay, request)
+    end
+  end
+end
+
+local function getSettings()
+  local function request()
+    midi.sendSysex (port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x44,0x00,0x00,0x00,0x00,0x00})
+  end
+  schedule.after(REQUEST_GAP_MS*10, request) -- assign a 50ms gap after 10th wave name has been requested
+end
+
 ---------------------------- MIDI send functions ---------------------------------------
 --
 function sendSimpleNRPN(nrpn, value)
@@ -451,39 +476,7 @@ function selectIt(valueObject, value)
   midi.sendControlChange(port , channel , 32, bankNum)
   midi.sendProgramChange(port , channel , progNum)
   -- request patch 
-  getPatch(nil,1)
-end
-
---------------------------------- MIDI request functions ----------------------------------------------------------
--- request current patch data from edit buffer without a program change message sent first (if patch selected on Peak rather than E1)
-function getPatch(valueObject, value)
-  if value == 0 then return end
-  midi.sendSysex (port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x40,0x00,0x00,0x00,0x00,0x00}) 
-end
-
-local REQUEST_GAP_MS = 50  -- delay between requests
-
-function getAllWaveNames(valueObject, value)
-  if value == 0 then return end
-  for i = 64, 73 do
-    local delay = (i - 64) * REQUEST_GAP_MS
-    local function request()
-      midi.sendSysex(port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x47, 0x00, 0x00, i, 0x00, 0x00})
-    end
-    if delay == 0 then
-      request()
-    else
-      schedule.after(delay, request)
-    end
-  end
-end
-
-function getSettings(valueObject,value)
-  if value == 0 then return end
-  local function request()
-    midi.sendSysex (port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x44,0x00,0x00,0x00,0x00,0x00})
-  end
-  schedule.after(REQUEST_GAP_MS*10, request) -- assign a 50ms gap after 10th wave name has been requested
+  getPatch()
 end
 
 -- ---------- Persistence helpers for patch-name cache ----------
@@ -1556,6 +1549,10 @@ function midi.onSysex(midiInput, sysexBlock)
   end
 end
 
+-- NRPN reassembly registers
+local msbNum = 0
+local lsbNum = 0
+
 function midi.onControlChange(midiInput, ch, controllerNumber, value)
   if controllerNumber == 32 then
     parameterMap.set(deviceId, PT_VIRTUAL, 10032, value)
@@ -1834,6 +1831,6 @@ function preset.onLoad()
 end
 
 function preset.onReady()
-  getAllWaveNames(nil, 1)
-  getSettings(nil, 1)
+  getAllWaveNames()
+  getSettings()
 end
