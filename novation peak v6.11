@@ -461,66 +461,29 @@ function getPatch(valueObject, value)
   midi.sendSysex (port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x40,0x00,0x00,0x00,0x00,0x00}) 
 end
 
- -- request Peak settings data
-function getSettings(valueObject,value)
-  if value == 0 then return end
-  midi.sendSysex (port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x44,0x00,0x00,0x00,0x00,0x00})
-end
+local REQUEST_GAP_MS = 50  -- delay between requests
 
--- Request user wavetable names for all 10 user slots (64-73). Each response triggers waveName update via midi.onSysex (cmd=0x07).
 function getAllWaveNames(valueObject, value)
   if value == 0 then return end
   for i = 64, 73 do
-    midi.sendSysex(port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x47,0x00,0x00,i,0x00,0x00})
+    local delay = (i - 64) * REQUEST_GAP_MS
+    local function request()
+      midi.sendSysex(port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x47, 0x00, 0x00, i, 0x00, 0x00})
+    end
+    if delay == 0 then
+      request()
+    else
+      schedule.after(delay, request)
+    end
   end
 end
 
-local STARTUP_WAVE_FIRST_SLOT = 64
-local STARTUP_WAVE_LAST_SLOT = 73
-local STARTUP_WAVE_TIMEOUT_MS = 800
-local startupWavePending = {}
-local startupWaveHandshakeActive = false
-local startupSettingsRequested = false
-local startupWaveTimeoutHandle = nil
-
-local function resetStartupWavePending()
-  startupWavePending = {}
-  for slot = STARTUP_WAVE_FIRST_SLOT, STARTUP_WAVE_LAST_SLOT do
-    startupWavePending[slot] = true
+function getSettings(valueObject,value)
+  if value == 0 then return end
+  local function request()
+    midi.sendSysex (port, {0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E,0x44,0x00,0x00,0x00,0x00,0x00})
   end
-end
-
-local function cancelStartupWaveTimeout()
-  if startupWaveTimeoutHandle ~= nil then
-    schedule.cancel(startupWaveTimeoutHandle)
-    startupWaveTimeoutHandle = nil
-  end
-end
-
-local function requestStartupSettingsOnce()
-  if startupSettingsRequested then
-    return
-  end
-  startupSettingsRequested = true
-  startupWaveHandshakeActive = false
-  cancelStartupWaveTimeout()
-  getSettings(nil, 1)
-end
-
-local function acknowledgeStartupWaveName(slot)
-  if not startupWaveHandshakeActive then
-    return
-  end
-  if slot < STARTUP_WAVE_FIRST_SLOT or slot > STARTUP_WAVE_LAST_SLOT then
-    return
-  end
-  if startupWavePending[slot] ~= nil then
-    startupWavePending[slot] = nil
-  end
-  if next(startupWavePending) == nil then
-    print("All 10 user wavetable names received")
-    requestStartupSettingsOnce()
-  end
+  schedule.after(REQUEST_GAP_MS*10, request) -- assign a 50ms gap after 10th wave name has been requested
 end
 
 -- ---------- Persistence helpers for patch-name cache ----------
@@ -1590,7 +1553,6 @@ function midi.onSysex(midiInput, sysexBlock)
       waveName = waveName .. string.char(sysexBlock:peek(i+15))
     end
     waveTableNames[slot] = waveName
-    acknowledgeStartupWaveName(slot)
   end
 end
 
@@ -1871,12 +1833,7 @@ function preset.onLoad()
   scopeControl:repaint()
 end
 
--- request Peak wavetable names and global settings after preset is loaded
 function preset.onReady()
-  cancelStartupWaveTimeout()
-  startupSettingsRequested = false
-  resetStartupWavePending()
-  startupWaveHandshakeActive = true
-  getAllWaveNames(nil,1)
-  startupWaveTimeoutHandle = schedule.after(STARTUP_WAVE_TIMEOUT_MS, requestStartupSettingsOnce)
+  getAllWaveNames(nil, 1)
+  getSettings(nil, 1)
 end
