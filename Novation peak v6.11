@@ -1744,7 +1744,70 @@ local tapDownControlId = nil
 local tapDownTime = 0
 local tapDownValue = nil
 
+-- ============================================================
+-- Animate buttons: momentary + tap-to-latch
+-- CC7 params 114 & 115. Hold = momentary, short tap = toggle latch.
+-- Latch state is stored per param, so duplicate controls on
+-- different pages stay in sync.
+-- ============================================================
+
+local ANIMATE_TAP_MAX_MS = 250
+
+-- control id -> param (duplicates on other pages map to the same param)
+local ANIMATE_CTRL = {
+  [380] = 114, [144] = 114,
+  [374] = 115, [287] = 115,
+}
+
+-- shared state, one entry per param
+local animateLatched = {
+  [114] = false,
+  [115] = false,
+}
+
+-- per-control touch info (each control has its own touch timing)
+local animateTouchInfo = {}
+
+local function animateSet(param, v)
+  parameterMap.set(deviceId, PT_CC7, param, v)
+  print("animate", param, parameterMap.get(deviceId, PT_CC7, param))
+end
+
+local function animateTouch(controlId, touched)
+  local param = ANIMATE_CTRL[controlId]
+  if not param then return false end
+
+  local t = animateTouchInfo[controlId]
+  if not t then
+    t = { downTime = 0, wasLatched = false }
+    animateTouchInfo[controlId] = t
+  end
+
+  if touched then
+    t.downTime = controller.uptime()
+    t.wasLatched = animateLatched[param]
+    if not animateLatched[param] then
+      animateSet(param, 127)   -- momentary on
+    end
+  else
+    local short = (controller.uptime() - t.downTime) <= ANIMATE_TAP_MAX_MS
+    if t.wasLatched then
+      animateLatched[param] = false
+      animateSet(param, 0)     -- tap while latched: off
+    elseif short then
+      animateLatched[param] = true
+      animateSet(param, 127)   -- short tap: latch on
+    else
+      animateLatched[param] = false
+      animateSet(param, 0)     -- long hold: momentary off
+    end
+  end
+  return true
+end
+
 function events.onPotTouchChange(potId, controlId, touched)
+  if animateTouch(controlId, touched) then return end
+
   -- ===== short tap on a mod amount knob toggles its lock =====
   local modAmountIdx = CTRL_MOD_AMOUNT_INDEX[controlId]
   if modAmountIdx then
