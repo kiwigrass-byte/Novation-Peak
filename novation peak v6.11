@@ -1,5 +1,5 @@
 -- Novation PEAK preset v6.11
--- 10/04/26
+-- 10/06/26
 
 local authorDate = "Kiwigrass"
 info.setText(authorDate)
@@ -143,7 +143,7 @@ end
 -- title, e.g. "AMP ATTACK" -> "AMP ATTACK 101". The base (unsuffixed) name is
 -- captured the first time each control is seen so repeat updates don't keep
 -- stacking suffixes onto an already-modified name.
-local ahdsrBaseNames = setmetatable({}, {__mode = "v"})
+local ahdsrBaseNames = {}
 function ahdsrValueName(valueObject, value)
   local ctrl = valueObject:getControl()
   local id = ctrl:getId()
@@ -477,164 +477,6 @@ function selectIt(valueObject, value)
   midi.sendProgramChange(port , channel , progNum)
   -- request patch 
   getPatch()
-end
-
--- ---------- Persistence helpers for patch-name cache ----------
--- Electra One runtime in this preset:
---   persist(table)
---   recall(table)
--- We persist a tagged flat map and rebuild nameBank on load.
--- a tag to keep track of versions of patch-banks on the Peak 
-local PERSIST_TAG = "peakPatchNamesV1"
-
-local function makePatchKey(bank, patch)
-  return string.format("b%d_p%03d", bank, patch) -- bank 1..4, patch 0..127
-end
-
-local function flattenNameBank(src)
-  local flat = {}
-  local count = 0
-  for b = 1, 4 do
-    for p = 0, 127 do
-      local v = src[b] and src[b][p] or ""
-      v = tostring(v or "")
-      flat[makePatchKey(b, p)] = v
-      if v ~= "" then count = count + 1 end
-    end
-  end
-  return flat, count
-end
-
-local function inflateNameBank(flat)
-  local dst = {}
-  local count = 0
-  for b = 1, 4 do
-    dst[b] = {}
-    for p = 0, 127 do
-      local v = (flat and flat[makePatchKey(b, p)]) or ""
-      dst[b][p] = v
-      if v ~= "" then count = count + 1 end
-    end
-  end
-  return dst, count
-end
-
-local function saveNameBank()
-  local flat, count = flattenNameBank(nameBank)
-  local payload = {
-    _tag = PERSIST_TAG,
-    names = flat
-  }
-  local ok, err = pcall(persist, payload)
-  if ok then
-    print(string.format("nameBank persisted (%d non-empty names)", count))
-  else
-    print("nameBank persist failed: " .. tostring(err))
-  end
-end
-
-local function loadNameBank()
-  local payload = {}
-  local ok, err = pcall(recall, payload) -- recall(destinationTable)
-  if not ok then
-    print("nameBank recall failed: " .. tostring(err))
-    return
-  end
-  if payload._tag ~= PERSIST_TAG then
-    print("nameBank recall: no matching persisted payload tag")
-    return
-  end
-  if type(payload.names) ~= "table" then
-    print("nameBank recall: payload.names missing/invalid")
-    return
-  end
-  local rebuilt, count = inflateNameBank(payload.names)
-  nameBank = rebuilt
-  print(string.format("nameBank restored (%d non-empty names)", count))
-end
-
--- Debounced/controlled persistence during large scans
-local nameBankDirty = false
-local nameBankUpdates = 0
-local SAVE_EVERY_N_UPDATES = 128 
-
-local function markNameBankDirty()
-  nameBankDirty = true
-  nameBankUpdates = nameBankUpdates + 1
-  -- periodic checkpoint save during long scans
-  if (nameBankUpdates % SAVE_EVERY_N_UPDATES) == 0 then
-    saveNameBank()
-    nameBankDirty = false
-  end
-end
-
-local function flushNameBankIfDirty()
-  if nameBankDirty then
-    saveNameBank()
-    nameBankDirty = false
-  end
-end
-
------------------- Schedule patch scanning to extract patch name ------------------------
---
-local patchScanState = {
-  bank = 1,           -- current bank (1-4)
-  patch = 0,          -- current patch (0-127)
-  isRunning = false   -- scanner active flag
-}
-local SCAN_HEADER = { 0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41, 0x00, 0x00, 0x00 }
-local SCAN_PERIOD_MS = 200
-local scanHandle = nil
-
-local function stopPatchScanner()
-  patchScanState.isRunning = false
-  if scanHandle ~= nil then
-    schedule.cancel(scanHandle)
-    scanHandle = nil
-  end
-  flushNameBankIfDirty()
-  print("Patch scanner stopped")
-end
-
-local function scanNextPatch()
-  if not patchScanState.isRunning then
-    return
-  end
-  local bank = patchScanState.bank
-  local patch = patchScanState.patch
-  local msg = concat(SCAN_HEADER, {bank, patch})
-  midi.sendSysex(port, msg)
-  print(string.format(
-    "Requesting Bank %d, Patch %03d",
-    bank,
-    patch
-  ))
-  patchScanState.patch = patch + 1
-  if patchScanState.patch >= 128 then
-    patchScanState.patch = 0
-    patchScanState.bank = patchScanState.bank + 1
-    if patchScanState.bank > 4 then
-      patchScanState.bank = 1
-      print("Patch scanner cycle complete")
-      stopPatchScanner()
-      parameterMap.set(deviceId, PT_VIRTUAL, 10024, 0)
-    end
-  end
-end
-
-function startPatchScanner(valueObject, value)
-  if value == 0 then
-    return
-  end
-  if patchScanState.isRunning then
-    print("Patch scanner already running")
-    return
-  end
-  patchScanState.isRunning = true
-  patchScanState.bank = 1
-  patchScanState.patch = 0
-  print("Starting patch scanner: 4 banks × 128 patches")
-  scanHandle = schedule.every( SCAN_PERIOD_MS, scanNextPatch  )
 end
 
 -- ---------------- Mod amount macro bipolar scaling ----------------
@@ -1132,7 +974,6 @@ function lfoWaveChange(valueObject, value)
   if value ~= LFO_SINE and value ~= LFO_SH then
     value = LFO_SINE
   end
-
   -- When switching to S&H, preserve the current output value.
   if value == LFO_SH and lfo.waveform ~= LFO_SH then
     local currentValue = sineMacroValue()
@@ -1147,7 +988,6 @@ function lfoWaveChange(valueObject, value)
     lfo.shToValue = normalized
     lfo.shPhase = 1.0
   end
-
   -- When switching to Sine, preserve the current output value.
   if value == LFO_SINE and lfo.waveform ~= LFO_SINE then
     local currentValue = sampleAndHoldMacroValue()
@@ -1159,10 +999,8 @@ function lfoWaveChange(valueObject, value)
     normalized = clamp01(normalized)
     lfo.phase = math.acos(1 - 2 * normalized) / (2 * math.pi)
   end
-
   lfo.waveform = value
   applyCurrentLfoValue()
-
   -- Refresh the built-in speed display after waveform-dependent formatting changes.
   refreshLfoRateDisplay()
 end
@@ -1627,7 +1465,6 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     print("New MIDI Channel assigned by preset: "..math.floor(midiChannel))
     assignChannel(nil,1)         -- should set device channel
   end  
-
   -- Other INTERNAL only UI actions with purely virtual parameters
   -- Macro LFO enable toggle (0 = off, 1 = unipolar, 2 = bipolar)
   if pType == PT_VIRTUAL and pNum == PARAM_LFO then
@@ -1638,7 +1475,6 @@ function parameterMap.onChange(valueObjects, origin, midiValue)
     end
     return
   end
-
   -- Macro knob moved: rescale all 16 amounts from their bases, don't NRPN the macro itself
   if pType == PT_VIRTUAL and pNum == PARAM_KNOB then
     macroKnobValue = math.max(0, math.min(MAX_KNOB, midiValue))
@@ -1785,7 +1621,6 @@ function events.onPotTouchChange(potId, controlId, touched)
     end
     return
   end
-
   -- ===== release-send logic for the SysEx controls =====
   local idx = get_key_for_value(CTRL_RELEASE,controlId)
   if (idx == nil) then return end
@@ -1810,6 +1645,164 @@ function events.onPotTouchChange(potId, controlId, touched)
       midi.sendSysex (port, concat(SEND_SETTINGS_HEADER,sysExSettings)) 
     end
   end
+end
+
+-- ---------- Persistence helpers for patch-name cache ----------
+-- Electra One runtime in this preset:
+--   persist(table)
+--   recall(table)
+-- We persist a tagged flat map and rebuild nameBank on load.
+-- a tag to keep track of versions of patch-banks on the Peak 
+local PERSIST_TAG = "peakPatchNamesV1"
+
+local function makePatchKey(bank, patch)
+  return string.format("b%d_p%03d", bank, patch) -- bank 1..4, patch 0..127
+end
+
+local function flattenNameBank(src)
+  local flat = {}
+  local count = 0
+  for b = 1, 4 do
+    for p = 0, 127 do
+      local v = src[b] and src[b][p] or ""
+      v = tostring(v or "")
+      flat[makePatchKey(b, p)] = v
+      if v ~= "" then count = count + 1 end
+    end
+  end
+  return flat, count
+end
+
+local function inflateNameBank(flat)
+  local dst = {}
+  local count = 0
+  for b = 1, 4 do
+    dst[b] = {}
+    for p = 0, 127 do
+      local v = (flat and flat[makePatchKey(b, p)]) or ""
+      dst[b][p] = v
+      if v ~= "" then count = count + 1 end
+    end
+  end
+  return dst, count
+end
+
+local function saveNameBank()
+  local flat, count = flattenNameBank(nameBank)
+  local payload = {
+    _tag = PERSIST_TAG,
+    names = flat
+  }
+  local ok, err = pcall(persist, payload)
+  if ok then
+    print(string.format("nameBank persisted (%d non-empty names)", count))
+  else
+    print("nameBank persist failed: " .. tostring(err))
+  end
+end
+
+local function loadNameBank()
+  local payload = {}
+  local ok, err = pcall(recall, payload) -- recall(destinationTable)
+  if not ok then
+    print("nameBank recall failed: " .. tostring(err))
+    return
+  end
+  if payload._tag ~= PERSIST_TAG then
+    print("nameBank recall: no matching persisted payload tag")
+    return
+  end
+  if type(payload.names) ~= "table" then
+    print("nameBank recall: payload.names missing/invalid")
+    return
+  end
+  local rebuilt, count = inflateNameBank(payload.names)
+  nameBank = rebuilt
+  print(string.format("nameBank restored (%d non-empty names)", count))
+end
+
+-- Debounced/controlled persistence during large scans
+local nameBankDirty = false
+local nameBankUpdates = 0
+local SAVE_EVERY_N_UPDATES = 128 
+
+local function markNameBankDirty()
+  nameBankDirty = true
+  nameBankUpdates = nameBankUpdates + 1
+  -- periodic checkpoint save during long scans
+  if (nameBankUpdates % SAVE_EVERY_N_UPDATES) == 0 then
+    saveNameBank()
+    nameBankDirty = false
+  end
+end
+
+local function flushNameBankIfDirty()
+  if nameBankDirty then
+    saveNameBank()
+    nameBankDirty = false
+  end
+end
+
+------------------ Schedule patch scanning to extract patch name ------------------------
+--
+local patchScanState = {
+  bank = 1,           -- current bank (1-4)
+  patch = 0,          -- current patch (0-127)
+  isRunning = false   -- scanner active flag
+}
+local SCAN_HEADER = { 0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41, 0x00, 0x00, 0x00 }
+local SCAN_PERIOD_MS = 200
+local scanHandle = nil
+
+local function stopPatchScanner()
+  patchScanState.isRunning = false
+  if scanHandle ~= nil then
+    schedule.cancel(scanHandle)
+    scanHandle = nil
+  end
+  flushNameBankIfDirty()
+  print("Patch scanner stopped")
+end
+
+local function scanNextPatch()
+  if not patchScanState.isRunning then
+    return
+  end
+  local bank = patchScanState.bank
+  local patch = patchScanState.patch
+  local msg = concat(SCAN_HEADER, {bank, patch})
+  midi.sendSysex(port, msg)
+  print(string.format(
+    "Requesting Bank %d, Patch %03d",
+    bank,
+    patch
+  ))
+  patchScanState.patch = patch + 1
+  if patchScanState.patch >= 128 then
+    patchScanState.patch = 0
+    patchScanState.bank = patchScanState.bank + 1
+    if patchScanState.bank > 4 then
+      patchScanState.bank = 1
+      print("Patch scanner cycle complete")
+      stopPatchScanner()
+      parameterMap.set(deviceId, PT_VIRTUAL, 10024, 0)
+    end
+  end
+end
+
+function startPatchScanner(valueObject, value)
+  if value == 0 then
+    return
+  end
+  if patchScanState.isRunning then
+    print("Patch scanner already running")
+    return
+  end
+  patchScanState.isRunning = true
+  patchScanState.bank = 1
+  patchScanState.patch = 0
+  print("Starting patch scanner: 4 banks × 128 patches")
+  scanHandle = schedule.every( SCAN_PERIOD_MS, scanNextPatch  )
 end
 
 -- restore cached patch names, change to performance page, initialize lfo scope when preset loads
