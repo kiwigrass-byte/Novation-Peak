@@ -690,7 +690,7 @@ local function smoothBezier(t)
   return t * t * (3 - 2 * t)
 end
 
--- ---------------- Waveform value calculation ----------------
+-- ================= Waveform value calculation ================
 
 local function sineMacroValue()
   local sineBipolar =  -math.cos(lfo.phase * 2 * math.pi)
@@ -715,7 +715,7 @@ local function currentLfoValue()
   return sineMacroValue()
 end
 
--- ---------------- S&H motion ----------------
+-- ================== Random Bezier motion ====================
 
 local function chooseNextSampleAndHoldTarget()
   lfo.shFromValue = lfo.heldRandom
@@ -775,7 +775,7 @@ local function updateSampleAndHoldGlide()
   end
 end
 
--- ---------------- Macro LFO modulation helpers ----------------
+-- ==================== Macro LFO modulation helpers =====================
 
 local function captureLfoMapBaseline()
   for i = 1, 16 do
@@ -804,7 +804,7 @@ local function applyCurrentLfoValue(valueOverride)
   applyMacroToAll()
 end
 
--- ---------------- Macro LFO scope helpers ----------------
+-- ===================== Macro LFO scope helpers ===================
 
 local function macroValueToNorm(value)
   local range =
@@ -823,7 +823,7 @@ function initializeScopeData()
   end
 end
 
--- ---------------- Macro LFO scheduler ----------------
+-- ===================== Macro LFO scheduler ==================
 
 local lfoHandle = nil
 
@@ -872,7 +872,7 @@ local function startLfoScheduler()
   lfoHandle = schedule.every(lfo.stepMs, lfoStep)
 end
 
--- ---------------- Macro LFO lifecycle ----------------
+-- ================ Macro LFO lifecycle ==================
 
 local function stopLfo()
   lfo.isRunning = false
@@ -932,7 +932,7 @@ function startLfo(mode)
 --  print("Starting macro LFO")
 end
 
--- ---------------- Macro LFO UI callbacks ----------------
+-- ====================== Macro LFO UI callbacks ===========================
 
 local LFO_RATE_MIN_MS = 300
 local LFO_RATE_MAX_MS = 20000
@@ -1022,7 +1022,7 @@ function displayLfoRate(valueObject, value)
   return string.format("%d ms", periodMs)
 end
 
--- A callback to draw the XY pad graphics
+-- =============== Callback to draw the XY pad graphics ==================
 
 -- Map normalized [-1,1] to pixel Y inside the scope rect
 local function normToPixel(n, top, bottom)
