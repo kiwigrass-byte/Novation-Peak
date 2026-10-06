@@ -138,11 +138,7 @@ function formatPan(valueObject, value)
 end
 
 -- Set Name functions ---------
--- AHDSR value-in-name suffix
--- Appends the live value of an AHDSR envelope's primary stage to its tile
--- title, e.g. "AMP ATTACK" -> "AMP ATTACK 101". The base (unsuffixed) name is
--- captured the first time each control is seen so repeat updates don't keep
--- stacking suffixes onto an already-modified name.
+-- Appends the value of an AHDSR envelope's primary stage to its name
 local ahdsrBaseNames = {}
 function ahdsrValueName(valueObject, value)
   local ctrl = valueObject:getControl()
