@@ -1,4 +1,4 @@
-# Novation Peak with Patch Parsing v6.9
+# Novation Peak with Patch Parsing v6.12
 ---
 - Based closely on V6 of Novation Summit preset by @NewIgnis, using the Peak sysEx header and including only Peak relevant parameters.
 - Synth must be on at least firmware V2.1 (august 2022)
