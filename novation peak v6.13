@@ -1064,6 +1064,73 @@ function paintScope(control, value)
   end
 end
 
+-- ========================= XY Pad ====================================================
+-- Description: 2-axis touch pad that sends two parameters.
+
+-- XY_PAD CTRL ID
+local CTRL_XY_PAD = 381
+-- State (normalized 0..1, origin bottom-left)
+local X = 0.5
+local Y = 0.5
+
+local g = graphics
+local xYControl = controls.get(CTRL_XY_PAD)
+
+local XY_WIDTH = 650
+local XY_HEIGHT = 325
+
+-- Colors
+local BG   = 0x000000  -- background
+local GRID = 0x404040  -- crosshair lines
+local DOT  = 0xFFFFFF  -- cursor
+
+PARAM_X_SELECT = 12000
+PARAM_Y_SELECT = 12001
+-- Virtual parameter numbers the XY pad writes to. Wired to MIDI mapping via parameterMap
+-- {param number, param type, MIDI max}
+local PARAM_X = { [0] = {29, 2, 16383}, {79, 1, 127} , {48, 0, 127}}
+local PARAM_Y = PARAM_X
+
+local function emit()
+  local xNum = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_X_SELECT)
+  local yNum = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_Y_SELECT)
+
+  parameterMap.set(deviceId, PARAM_X[xNum][2], PARAM_X[xNum][1], math.floor(X * PARAM_X[xNum][3]))
+  parameterMap.set(deviceId, PARAM_Y[yNum][2], PARAM_Y[yNum][1], math.floor(Y * PARAM_Y[yNum][3]))
+end
+
+function paintXY(control, value)
+  local b = control:getBounds()
+  local w = b[WIDTH]
+  local h = b[HEIGHT]
+
+  g.setColor(BG)
+  g.fillRect(0, 0, w, h)
+  g.setColor(GRID) 
+  g.drawRoundRect(0, 0, b[WIDTH], b[HEIGHT], 5)
+
+  g.setColor(GRID)
+  local mx = math.floor(w / 2)
+  local my = math.floor(h / 2)
+  g.drawLine(mx, 0, mx, h)
+  g.drawLine(0, my, w, my)
+
+  g.setColor(DOT)
+  local cx = math.floor(X * w)
+  local cy = math.floor((1 - Y) * h)
+  g.fillCircle(cx, cy, 14)
+end
+
+function touchXY(control, event)
+  if event.type == MOVE or event.type == DOWN then
+    local b = control:getBounds()
+    X = math.max(0, math.min(1, event.x / b[WIDTH]))
+    Y = math.max(0, math.min(1, 1 - event.y / b[HEIGHT]))
+    emit()
+    control:repaint()
+  end
+end
+
 -- ------------------ COMPARE_IT toggle block -----------------------------------
 -- A = parsed edit-buffer state (captured once per patch parse)
 -- B = live/edited parameter state (captured on demand when comparing)
@@ -1247,6 +1314,8 @@ local function resetVirtualParams()
   parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_LFO_WAVE, 0)
   parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_LFO_AMOUNT, 100)
   parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_COMPARE_IT, 0)
+  parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_X_SELECT, 0)
+  parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_Y_SELECT, 1)
 
   if lfo.isRunning then
     stopLfo()
@@ -1284,6 +1353,10 @@ local function resetVirtualParams()
   initializeScopeData()
   scopeControl:setPaintCallback(paintScope)
   scopeControl:repaint()
+
+  xYControl:setPaintCallback(paintXY)
+  xYControl:setTouchCallback(touchXY)
+  xYControl:repaint()
 end
 
 -- assigns sysEx MIDI values from received patch to corresponding preset parameter values via PATCH_PARAM_MAP: {byte #, parameter type, parameter #}
@@ -1812,72 +1885,8 @@ function events.onPotTouchChange(potId, controlId, touched)
   end
 end
 
--- ========================= XY Pad ====================================================
--- Description: 2-axis touch pad that sends two parameters.
 
--- XY_PAD CTRL ID
-local CTRL_XY_PAD = 381
--- State (normalized 0..1, origin bottom-left)
-local X = 0.5
-local Y = 0.5
-
-local g = graphics
-local xYControl = controls.get(CTRL_XY_PAD)
-
-local XY_WIDTH = 650
-local XY_HEIGHT = 325
-
--- Colors
-local BG   = 0x000000  -- background
-local GRID = 0x404040  -- crosshair lines
-local DOT  = 0xFFFFFF  -- cursor
-
--- Virtual parameter numbers the XY pad writes to. Wired to MIDI mapping via parameterMap
--- {param number, param type, MIDI max}
-local PARAM_X = { [0] = {29, 2, 16383}, {79, 1, 127} , {48, 0, 127}}
-local PARAM_Y = PARAM_X
-
-local function emit()
-  local xNum = parameterMap.get(deviceId, PT_VIRTUAL, 12000)
-  local yNum = parameterMap.get(deviceId, PT_VIRTUAL, 12001)
-
-  parameterMap.set(deviceId, PARAM_X[xNum][2], PARAM_X[xNum][1], math.floor(X * PARAM_X[xNum][3]))
-  parameterMap.set(deviceId, PARAM_Y[yNum][2], PARAM_Y[yNum][1], math.floor(Y * PARAM_Y[yNum][3]))
-end
-
-function paintXY(control, value)
-  local b = control:getBounds()
-  local w = b[WIDTH]
-  local h = b[HEIGHT]
-
-  g.setColor(BG)
-  g.fillRect(0, 0, w, h)
-  g.setColor(GRID) 
-  g.drawRoundRect(0, 0, b[WIDTH], b[HEIGHT], 5)
-
-  g.setColor(GRID)
-  local mx = math.floor(w / 2)
-  local my = math.floor(h / 2)
-  g.drawLine(mx, 0, mx, h)
-  g.drawLine(0, my, w, my)
-
-  g.setColor(DOT)
-  local cx = math.floor(X * w)
-  local cy = math.floor((1 - Y) * h)
-  g.fillCircle(cx, cy, 14)
-end
-
-function touchXY(control, event)
-  if event.type == MOVE or event.type == DOWN then
-    local b = control:getBounds()
-    X = math.max(0, math.min(1, event.x / b[WIDTH]))
-    Y = math.max(0, math.min(1, 1 - event.y / b[HEIGHT]))
-    emit()
-    control:repaint()
-  end
-end
-
--- restore cached patch names, change to performance page, initialize lfo scope when preset loads
+-- restore cached patch names, change to performance page, initialize lfo scope and XY pad when preset loads
 function preset.onLoad()
   -- load persisted name data if created
   loadNameBank()       
