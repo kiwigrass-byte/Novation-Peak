@@ -1087,8 +1087,8 @@ local DOT  = 0xFFFFFF  -- cursor
 -- option parameters
 local PARAM_X_SELECT = 12000
 local PARAM_Y_SELECT = 12001
-local PARM_X_FLIP   = 12002
-local PARM_Y_FLIP   = 12003
+local PARAM_X_FLIP   = 12002
+local PARAM_Y_FLIP   = 12003
 local PARAM_X_CURVE = 12004
 local PARAM_Y_CURVE = 12005
 
@@ -1098,12 +1098,69 @@ local PARAM_X = { [0] = {29, 2, 16383}, {79, 1, 127}, {48, 0, 127}, {43, 0, 127}
                 {80, 1, 127}, {23, 2, 16383}, {24, 2, 16383}, }
 local PARAM_Y = PARAM_X
 
+-- ===== Curve / flip helpers =====
+local CURVE_LINEAR, CURVE_EXP, CURVE_LOG = 0, 1, 2
+
+local function clamp01(v)
+  if v < 0 then return 0 end
+  if v > 1 then return 1 end
+  return v
+end
+
+-- n: 0..1 -> shaped 0..1
+local function applyCurve(n, curve)
+  if curve == CURVE_EXP then
+    return n * n
+  elseif curve == CURVE_LOG then
+    return 1 - (1 - n) * (1 - n)
+  end
+  return n
+end
+
+-- shaped 0..1 -> n: 0..1
+local function invertCurve(n, curve)
+  if curve == CURVE_EXP then
+    return math.sqrt(n)
+  elseif curve == CURVE_LOG then
+    return 1 - math.sqrt(1 - n)
+  end
+  return n
+end
+
+-- pad position (0..1) -> parameter-normalised (0..1)
+local function padToParam(n, flip, curve)
+  if flip == 1 then n = 1 - n end
+  return applyCurve(n, curve)
+end
+
+-- parameter-normalised (0..1) -> pad position (0..1)
+local function paramToPad(n, flip, curve)
+  n = invertCurve(n, curve)
+  if flip == 1 then n = 1 - n end
+  return n
+end
+
+local function getAxisOptions()
+  local xFlip  = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_X_FLIP)  or 0
+  local yFlip  = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_Y_FLIP)  or 0
+  local xCurve = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_X_CURVE) or 0
+  local yCurve = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_Y_CURVE) or 0
+  return xFlip, yFlip, xCurve, yCurve
+end
+
 local function emit()
   local xNum = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_X_SELECT)
   local yNum = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_Y_SELECT)
+  local xd = PARAM_X[xNum]
+  local yd = PARAM_Y[yNum]
+  if not xd or not yd then return end
 
-  parameterMap.set(deviceId, PARAM_X[xNum][2], PARAM_X[xNum][1], math.floor(X * PARAM_X[xNum][3]))
-  parameterMap.set(deviceId, PARAM_Y[yNum][2], PARAM_Y[yNum][1], math.floor(Y * PARAM_Y[yNum][3]))
+  local xFlip, yFlip, xCurve, yCurve = getAxisOptions()
+  local xn = padToParam(X, xFlip, xCurve)
+  local yn = padToParam(Y, yFlip, yCurve)
+
+  parameterMap.set(deviceId, xd[2], xd[1], math.floor(xn * xd[3] + 0.5))
+  parameterMap.set(deviceId, yd[2], yd[1], math.floor(yn * yd[3] + 0.5))
 end
 
 function paintXY(control, value)
@@ -1138,7 +1195,6 @@ function touchXY(control, event)
   end
 end
 
--- Read the current X/Y parameter values back into the pad position (no write-out)
 function syncXYFromParams()
   local xNum = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_X_SELECT) or 0
   local yNum = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_Y_SELECT) or 1
@@ -1146,13 +1202,21 @@ function syncXYFromParams()
   local yd = PARAM_Y[yNum]
   if not xd or not yd then return end
 
+  local xFlip, yFlip, xCurve, yCurve = getAxisOptions()
+
   local xv = parameterMap.get(deviceId, xd[2], xd[1])
   local yv = parameterMap.get(deviceId, yd[2], yd[1])
 
-  if xv then X = math.max(0, math.min(1, xv / xd[3])) end
-  if yv then Y = math.max(0, math.min(1, yv / yd[3])) end
+  if xv then X = clamp01(paramToPad(clamp01(xv / xd[3]), xFlip, xCurve)) end
+  if yv then Y = clamp01(paramToPad(clamp01(yv / yd[3]), yFlip, yCurve)) end
 
   xYControl:repaint()
+end
+
+-- call from X and Y option controls
+function xyOptionChange(valueObject, value)
+  emit() -- sound flips (synth parameters change immediately) with change in option
+--  syncXYFromParams() -- alternative to emit(): dot updates immediately but synth parameters only changes when dot moves 
 end
 
 -- call from X and Y select controls so location of XY dot syncs with selected params
@@ -1345,6 +1409,10 @@ local function resetVirtualParams()
   parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_COMPARE_IT, 0)
   parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_X_SELECT, 0)
   parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_Y_SELECT, 1)
+  parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_X_FLIP, 0)
+  parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_Y_FLIP, 0)
+  parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_X_CURVE, 0)
+  parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_Y_CURVE, 0)
 
   if lfo.isRunning then
     stopLfo()
