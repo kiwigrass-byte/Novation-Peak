@@ -163,6 +163,65 @@ This creates a two-segment Bezier-interpolated glide that reaches the boundaries
 - For timer-driven LFO updates, prefer `parameterMap.modulate(...)` over `set`/`updateValue`.
 - `modulate` sends live MIDI without writing map state or triggering callbacks/formatters, reducing lock-hold pressure and improving UI responsiveness.
 - For large patch parsing, use `parameterMap.transaction(...)` to coalesce map activity and avoid per-parameter callback storms during ingest.
+
+## XY Pad Mapping: Flip, Curve, and Sync Behavior
+
+The XY pad writes two selected parameters using `PARAM_X_SELECT` and `PARAM_Y_SELECT`, with each destination defined in the `PARAM_X` / `PARAM_Y` table as:
+
+- parameter number
+- parameter type
+- maximum value (`127` for 7-bit, `16383` for 14-bit)
+
+### Mapping behavior
+
+Each axis supports:
+
+- `FLIP`  
+  - `0` = normal direction
+  - `1` = reversed direction
+
+- `CURVE`  
+  - `0` = linear
+  - `1` = exponential
+  - `2` = logarithmic
+
+The value flow is:
+
+- **Pad movement → synth parameters** via `emit()`
+- **Synth parameters → pad position** via `syncXYFromParams()`
+
+### XY write logic
+
+`emit()`:
+
+1. Reads the selected X/Y destination parameters.
+2. Reads the flip/curve settings for each axis.
+3. Converts pad position (`X`, `Y`) into normalized parameter values.
+4. Applies the destination max value (`127` or `16383`).
+5. Writes the result with `parameterMap.set()`.
+
+### XY read-back logic
+
+`syncXYFromParams()`:
+
+1. Reads the selected destination parameters.
+2. Reads current parameter values from the synth.
+3. Converts them back into pad coordinates.
+4. Applies inverse flip/curve mapping.
+5. Repaints the pad.
+
+### Current interaction model
+
+- `touchXY()` calls `emit()` so moving the pad updates the synth immediately.
+- `xyOptionChange()` also calls `emit()` so changing flip/curve updates the synth immediately using the current pad position.
+- `xySelectChange()` calls `syncXYFromParams()` so the pad dot follows the newly selected destination parameter.
+
+### Notes
+
+- The third field in `PARAM_X` / `PARAM_Y` already handles 7-bit vs 14-bit scaling correctly.
+- `math.floor(value + 0.5)` is used when writing to round to the nearest integer.
+- `clamp01()` is used when reading values back to keep the dot position in range.
+- `PARAM_Y = PARAM_X` is acceptable if X and Y share the same destination list.
   
 ## Preset UX conventions in this repo
 
