@@ -1084,8 +1084,14 @@ local BG   = 0x000000  -- background
 local GRID = 0x404040  -- crosshair lines
 local DOT  = 0xFFFFFF  -- cursor
 
-PARAM_X_SELECT = 12000
-PARAM_Y_SELECT = 12001
+-- option parameters
+local PARAM_X_SELECT = 12000
+local PARAM_Y_SELECT = 12001
+local PARM_X_FLIP   = 12002
+local PARM_Y_FLIP   = 12003
+local PARAM_X_CURVE = 12004
+local PARAM_Y_CURVE = 12005
+
 -- Virtual parameter numbers the XY pad writes to. Wired to MIDI mapping via parameterMap
 -- {param number, param type, MIDI max}
 local PARAM_X = { [0] = {29, 2, 16383}, {79, 1, 127}, {48, 0, 127}, {43, 0, 127}, {44, 0, 127}, 
