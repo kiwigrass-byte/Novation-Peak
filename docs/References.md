@@ -19,9 +19,9 @@ This file captures external documentation and project conventions we rely on whe
   - The modulated value **is sent**, but it is **not saved** in the Parameter Map and is **not processed** by Lua callbacks or value formatters.
   - `parameterMap.onChange()` is **not called** for it either.
   - The modulation is spread over the range of the entry's first message and held inside it. For a message with no sign, that range is its MIDI min .. max.
-  - Ideal for high-frequency temporary value changes (e.g., an LFO timer modulating mod-amount depth) because it avoids the overhead of `set`/`updateValue` (no map write, no callback dispatch, no formatter re-evaluation).
-  - Used in this preset for the macro-amount LFO (`applyCurrentMacroLfoValue` → `modulateAmountFromBaseline`) instead of repeatedly calling `parameterMap.set`/`updateValue` on a timer tick, which preserves UI responsiveness under load.
-  - Baseline handling: because `modulate` does not alter the stored Parameter Map value, the script keeps its own baseline cache (`lfoMapBaseline`) captured when the LFO starts, so the modulation depth remains accurate around the real stored value.
+  - Ideal for high-frequency temporary value changes (e.g., an LFO timer modulating mod-amount depth) because it avoids the overhead of `set`/`updateValue` (no map write, no callback dispatch, no formatter churn).
+  - Used in this preset for the macro-amount LFO (`applyCurrentMacroLfoValue` → `modulateAmountFromBaseline`) instead of repeatedly calling `parameterMap.set`/`updateValue` on a timer tick.
+  - Baseline handling: because `modulate` does not alter the stored Parameter Map value, the script keeps its own baseline cache (`lfoMapBaseline`) captured when the LFO starts, so the modulation can be reapplied deterministically.
 
 ## Project lessons learned (Novation Peak preset)
 
@@ -69,29 +69,17 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - For timer-driven or rapidly repeating value changes (e.g., an LFO), use `parameterMap.modulate` instead of `parameterMap.set`/`updateValue`.
 - This avoids repeated map writes, callback dispatch, and formatter re-evaluation on every tick, while still transmitting the live value to the synth.
 - Keep a separate baseline cache for the "real" stored value, since `modulate` does not update the Parameter Map.
-   
+
 ### 7) Scheduled background work: prefer `schedule` over a shared timer
-- The patch scanner was migrated from the shared `timer.onTick` callback to
-  `schedule.every(SCAN_PERIOD_MS, scanNextPatch)`.
-- The scanner stores the returned schedule handle and calls
-  `schedule.cancel(scanHandle)` when scanning is stopped or the complete
-  four-bank scan has finished.
-- The primary reason was to leave the timer path available for the macro-knob
-  LFO. Patch scanning and LFO processing are now independent scheduled tasks
-  rather than separate responsibilities competing inside one timer callback.
-- This also gives the scanner an explicit lifecycle: start, repeat, cancel, and
-  completion cleanup can be handled locally in `startPatchScanner()`,
-  `scanNextPatch()`, and `stopPatchScanner()`.
-- Scheduling keeps each scan step short and deferred. The script sends one
-  patch request and returns, instead of performing a long scan or blocking while
-  waiting for responses. This helps preserve controller responsiveness during
-  large SysEx operations.
-- The explicit handle makes cancellation deterministic and prevents a scanner
-  from continuing after it has completed, been stopped, or otherwise needs to
-  yield to other preset activity.
-  
+- The patch scanner was migrated from the shared `timer.onTick` callback to `schedule.every(SCAN_PERIOD_MS, scanNextPatch)`.
+- The scanner stores the returned schedule handle and calls `schedule.cancel(scanHandle)` when scanning is stopped or the complete four-bank scan has finished.
+- The primary reason was to leave the timer path available for the macro-knob LFO. Patch scanning and LFO processing are now independent scheduled tasks rather than separate responsibilities competing inside one timer callback.
+- This also gives the scanner an explicit lifecycle: start, repeat, cancel, and completion cleanup can be handled locally in `startPatchScanner()`, `scanNextPatch()`, and `stopPatchScanner()`.
+- Scheduling keeps each scan step short and deferred. The script sends one patch request and returns, instead of performing a long scan or waiting while responses arrive. This helps preserve controller responsiveness during large SysEx operations.
+- The explicit handle makes cancellation deterministic and prevents a scanner from continuing after it has completed, been stopped, or otherwise needs to yield to other preset activity.
+
 ### 8) Startup sequencing: event-driven wave-name handshake with timeout fallback
-- On `preset.onReady()`, request all 10 user wavetable names first (slots 64–73).
+- On `preset.onReady()`, request all 10 user wavetable names first.
 - Do **not** request settings on a fixed long delay by default.
 - Instead, track incoming wavetable-name replies in `midi.onSysex` (cmd `0x07`) and request settings immediately once all expected replies are received.
 - Keep a timeout fallback (`schedule.after(...)`) so startup can still continue if one or more replies are missing.
@@ -104,31 +92,31 @@ After bulk patch apply settles, then run derived-state/UI sync:
 - Use a one-shot guard so settings request is sent only once even if completion and timeout race.
 - Reduced startup log noise by printing a single completion message once all 10 wavetable names are received.
 
- ### 9) Unset MIDI value
+### 9) Unset MIDI value
 - MIDI_VALUE_DO_NOT_SEND: The value a message holds when it has nothing to send - a pad that sends something when it is pressed and nothing when it is let go writes this in its off value.
 - It is 16537, which is not a MIDI value of any width, so it can never be mistaken for one.
-- It is accepted by the setters that build a message and refused by everything that sends: parameterMap.set() and the midi.send* functions take 0 to 16383.
-- <message>:isValueSet() and <value>:isSet() ask the same question without the number.
-- The earlier versions of the preset had several params in assignParams() that were for the Summit and so there was no Peak parameter. This generated 16537 messages.  It was useful way to identify unused parameters that could be removed.  
+- It is accepted by the setters that build a message and refused by everything that sends: `parameterMap.set()` and the `midi.send*` functions take 0 to 16383.
+- `<message>:isValueSet()` and `<value>:isSet()` ask the same question without the number.
+- The earlier versions of the preset had several params in `assignParams()` that were for the Summit and so there was no Peak parameter. This generated 16537 messages. It was useful way to identify missing Peak mappings.
 
 ### 10) macro-LFO
-- In macro S&H target selection, hard clamping candidate values to `0..1` caused edge stickiness near 0%/100% because outward moves collapsed to the boundary. MACRO_LFO_SH_MAX_STEP limits how far the next target can move from the current value. The use of: math.random() + math.random() - 1
-creates a triangular probability distribution, making smaller movements more likely than large ones.
+- In macro S&H target selection, hard clamping candidate values to `0..1` caused edge stickiness near 0%/100% because outward moves collapsed to the boundary. `MACRO_LFO_SH_MAX_STEP` limits how far each random step can move, creating a triangular probability distribution that favors smaller moves over larger ones.
 - Replaced clamp-based edge handling with reflected boundaries so overshoot is mirrored back into range, preserving motion while keeping normalized targets.
 - Result: less boundary dwell, smoother perceived movement near the macro range limits.
 - Triangle mode changes continuously on every LFO tick, while S&H holds each sampled target for most of its cycle.
 - As a result, S&H may require a faster rate to feel continuously active; slower rates intentionally produce longer held movements. See below.
-- The smoothBezier function (cubic ease-in/ease-out: t² × (3 - 2t)) curves the progression, so the value accelerates into the movement and decelerates out of it — more organic/musical than a flat linear ramp.
-- So the S&H still randomly picks targets and still uses the same glide duration, but now the path between them is curved instead of straight. 
-- The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal. With: `local MACRO_LFO_SH_MAX_STEP = 1`, `local MACRO_LFO_SH_GLIDE_FRACTION = 1.00`
-- The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, acceleration changes at each target boundary, creating a subtle soft transition between random segments.This produces an eased transition: Movement begins slowly. The rate increases toward the middle of the transition. Movement slows as it approaches the next random target. The output reaches each target with zero velocity. The next target is selected immediately, allowing continuous movement.
+- The `smoothBezier` function (cubic ease-in/ease-out: `t² × (3 - 2t)`) curves the progression, so the value accelerates into the movement and decelerates out of it — more organic/musical than a straight line.
+- So the S&H still randomly picks targets and still uses the same glide duration, but now the path between them is curved instead of straight.
+- The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal.
+- The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, it is still a fixed easing curve, not a general-purpose curve editor.
 
 ### 11) Macro S&H sampling-rate scaling for longer LFO periods
-The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static and unresponsive. At short periods (300 ms), sampling once per cycle is already fast enough. The solution is to scale the S&H sampling rate (samples per cycle) with LFO period to maintain  constant perceived randomness:
-- ≤ 2 sec: 1 sample/cycle (once every 2 seconds)
-- ≥ 20 sec: 5 samples/cycle (once every 4 seconds)
-- Linear interpolation between
-Added an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`. `shPhase` advances at a scaled rate: `stepMs / (periodMs / multiplier)`. When `shPhase` wraps, trigger a new S&H target (`chooseNextSampleAndHoldTarget`). The glide/hold timing (`updateSampleAndHoldGlide`) uses `shPhase` instead of the triangle's `phase`, so glide behavior is relative to the sub-cycle, not the full cycle. Triangle mode is unaffected; it continues to update on every tick at the base period.
+- The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static.
+- To keep movement perceptually active across the full rate range, the S&H sampling cadence now scales with the period:
+  - ≤ 2 sec: 1 sample/cycle (once every 2 seconds)
+  - ≥ 20 sec: 5 samples/cycle (once every 4 seconds)
+  - Linear interpolation between
+- Added an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`. `shPhase` advances at a scaled rate: `stepMs / (periodMs / multiplier)`. When `shPhase` wraps, a new target is selected and glide begins.
 - S&H feels responsive across the full rate range (300 ms–20 s) without changing the perceived glide shape or hold duration relative to each sampled target.
 
 ## Waveform & Wave-Folding Changes (v6.9)
@@ -142,15 +130,15 @@ Replaced the triangle waveform with a sine wave for the macro LFO. The sine wave
 ### 2. Smooth Random: Reflection → Wave Folding
 Changed the S&H (Sample & Hold) random target selection from **reflection** to **wave folding**:
 
-**Previous behavior (reflection):** When a random movement would overshoot a 0..1 boundary, the algorithm would instantly "mirror" the value back. This meant overshooting the boundary was a rare event, effectively limiting the available modulation range. (e.g., 0.8 + 0.25 step → 1.05, the reflected path would be 0.8 -> 1 - 0.25 = 0.75). Then tried direct to folded target (e.g., 0.8 -> 0.8 + 0.2 - 0.05 = 0.95). 
+**Previous behavior (reflection):** When a random movement would overshoot a 0..1 boundary, the algorithm would instantly "mirror" the value back. This meant overshooting the boundary was a rare event and boundary hits felt less intentional.
 
-**New behavior (wave folding):** When a random target overshoots a boundary (e.g., 0.8 + 0.25 step → 1.05), the glide path now is in two stages:
-1. **Travels to the boundary** (0.8 → 1.0)
-2. **Bounces back into range** (1.0 → 0.95)
+**New behavior (wave folding):** When a random target overshoots a boundary (e.g., `0.8 + 0.25` step → `1.05`), the glide path now is in two stages:
+1. **Travels to the boundary** (`0.8 → 1.0`)
+2. **Bounces back into range** (`1.0 → 0.95`)
 
-This creates a two-segment Bezier-interpolated glide that reaches the boundaries frequently, making full modulation range accessibility common rather than rare. Both segments use smooth Bezier easing, and their relative lengths are proportioned by distance to maintain consistent glide speed across the full path.
+This creates a two-segment Bezier-interpolated glide that reaches the boundaries frequently, making full modulation range accessibility common rather than rare. Both segments use smooth Bezier easing so the motion feels continuous.
 
-**Implementation:** A new `shBoundary` waypoint field tracks the boundary the glide must pass through, and `updateSampleAndHoldGlide()` splits the glide into two eased segments (from→boundary and boundary→to) when folding occurs.
+**Implementation:** A new `shBoundary` waypoint field tracks the boundary the glide must pass through, and `updateSampleAndHoldGlide()` splits the glide into two eased segments (from→boundary and boundary→target).
 
 ### Practical rules
 - Do small chunks of work frequently instead of long blocks.
@@ -222,7 +210,7 @@ The value flow is:
 - `math.floor(value + 0.5)` is used when writing to round to the nearest integer.
 - `clamp01()` is used when reading values back to keep the dot position in range.
 - `PARAM_Y = PARAM_X` is acceptable if X and Y share the same destination list.
-  
+
 ## Preset UX conventions in this repo
 
 - Patch scroll and patch select are separate controls.
