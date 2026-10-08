@@ -5,7 +5,7 @@ local authorDate = "Kiwigrass"
 info.setText(authorDate)
 
 -- Preset compatibility check
-assert( controller.isRequired(MODEL_MK2, "5.0.0"), "Version 5.0.0 or higher is required" )
+assert( controller.isRequired(MODEL_MK2, "5.0.0"), "MK2 fw 5.0.0 or higher required" )
 
 local deviceId = 1 -- the device ID used in the E1 preset
 local device = devices.get(deviceId)
