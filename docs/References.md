@@ -19,9 +19,9 @@ This file captures external documentation and project conventions we rely on whe
   - The modulated value **is sent**, but it is **not saved** in the Parameter Map and is **not processed** by Lua callbacks or value formatters.
   - `parameterMap.onChange()` is **not called** for it either.
   - The modulation is spread over the range of the entry's first message and held inside it. For a message with no sign, that range is its MIDI min .. max.
-  - Ideal for high-frequency temporary value changes (e.g., an LFO timer modulating mod-amount depth) because it avoids the overhead of `set`/`updateValue` (no map write, no callback dispatch, no formatter churn).
-  - Used in this preset for the macro-amount LFO (`applyCurrentMacroLfoValue` → `modulateAmountFromBaseline`) instead of repeatedly calling `parameterMap.set`/`updateValue` on a timer tick.
-  - Baseline handling: because `modulate` does not alter the stored Parameter Map value, the script keeps its own baseline cache (`lfoMapBaseline`) captured when the LFO starts, so the modulation can be reapplied deterministically.
+  - Ideal for high-frequency temporary value changes (e.g., an LFO timer modulating mod-amount depth) because it avoids the overhead of `set`/`updateValue` (no map write, no callback dispatch, no redraw churn).
+  - Used in this preset for the macro-amount LFO instead of repeatedly calling `parameterMap.set`/`updateValue` on a timer tick.
+  - Baseline handling: because `modulate` does not alter the stored Parameter Map value, keep a separate baseline cache and apply modulation relative to that.
 
 ## Project lessons learned (Novation Peak preset)
 
@@ -72,90 +72,41 @@ After bulk patch apply settles, then run derived-state/UI sync:
 
 ### 7) Scheduled background work: prefer `schedule` over a shared timer
 - The patch scanner was migrated from the shared `timer.onTick` callback to `schedule.every(SCAN_PERIOD_MS, scanNextPatch)`.
-- The scanner stores the returned schedule handle and calls `schedule.cancel(scanHandle)` when scanning is stopped or the complete four-bank scan has finished.
-- The primary reason was to leave the timer path available for the macro-knob LFO. Patch scanning and LFO processing are now independent scheduled tasks rather than separate responsibilities competing inside one timer callback.
-- This also gives the scanner an explicit lifecycle: start, repeat, cancel, and completion cleanup can be handled locally in `startPatchScanner()`, `scanNextPatch()`, and `stopPatchScanner()`.
-- Scheduling keeps each scan step short and deferred. The script sends one patch request and returns, instead of performing a long scan or waiting while responses arrive. This helps preserve controller responsiveness during large SysEx operations.
-- The explicit handle makes cancellation deterministic and prevents a scanner from continuing after it has completed, been stopped, or otherwise needs to yield to other preset activity.
+- The scanner stores the returned schedule handle and calls `schedule.cancel(scanHandle)` when scanning is stopped or complete.
+- Primary reason: keep timer path available for macro LFO and avoid scheduling contention.
+- Keep each scan step short and deferred.
 
 ### 8) Startup sequencing: event-driven wave-name handshake with timeout fallback
 - On `preset.onReady()`, request all 10 user wavetable names first.
-- Do **not** request settings on a fixed long delay by default.
-- Instead, track incoming wavetable-name replies in `midi.onSysex` (cmd `0x07`) and request settings immediately once all expected replies are received.
-- Keep a timeout fallback (`schedule.after(...)`) so startup can still continue if one or more replies are missing.
-- Guard the settings request with a one-shot flag to prevent duplicate sends when “all replies received” and timeout occur close together.
-- In this preset, this reduces unnecessary startup latency versus a fixed 1 s delay while preserving robustness on slower or lossy MIDI paths.
-- Replaced fixed startup delay (`schedule.after(..., getSettings, ...)`) with an event-driven handshake.
-- On `preset.onReady()`, request user wavetable names (slots 64–73) first.
-- Track incoming wavetable-name replies in `midi.onSysex` (`cmd == 0x07`), then request settings immediately after all expected replies arrive.
-- Keep a timeout fallback (`schedule.after`) so settings are still requested if one or more wavetable replies are missing.
-- Use a one-shot guard so settings request is sent only once even if completion and timeout race.
-- Reduced startup log noise by printing a single completion message once all 10 wavetable names are received.
+- Request settings after all expected wavetable replies arrive in `midi.onSysex`, not by default fixed delay.
+- Keep a timeout fallback (`schedule.after(...)`) if replies are missing.
+- Guard settings request with one-shot flag to avoid duplicates.
 
 ### 9) Unset MIDI value
-- MIDI_VALUE_DO_NOT_SEND: The value a message holds when it has nothing to send - a pad that sends something when it is pressed and nothing when it is let go writes this in its off value.
-- It is 16537, which is not a MIDI value of any width, so it can never be mistaken for one.
-- It is accepted by the setters that build a message and refused by everything that sends: `parameterMap.set()` and the `midi.send*` functions take 0 to 16383.
-- `<message>:isValueSet()` and `<value>:isSet()` ask the same question without the number.
-- The earlier versions of the preset had several params in `assignParams()` that were for the Summit and so there was no Peak parameter. This generated 16537 messages. It was useful way to identify missing Peak mappings.
+- `MIDI_VALUE_DO_NOT_SEND` indicates “no value to send” and is intentionally outside valid MIDI ranges.
+- Accepted by setters that build messages, refused by actual senders (`midi.send*` expects valid MIDI ranges).
+- Useful when a control needs meaningful on-value and explicit no-send off-value semantics.
 
-### 10) macro-LFO
-- In macro S&H target selection, hard clamping candidate values to `0..1` caused edge stickiness near 0%/100% because outward moves collapsed to the boundary. `MACRO_LFO_SH_MAX_STEP` limits how far each random step can move, creating a triangular probability distribution that favors smaller moves over larger ones.
-- Replaced clamp-based edge handling with reflected boundaries so overshoot is mirrored back into range, preserving motion while keeping normalized targets.
-- Result: less boundary dwell, smoother perceived movement near the macro range limits.
-- Triangle mode changes continuously on every LFO tick, while S&H holds each sampled target for most of its cycle.
-- As a result, S&H may require a faster rate to feel continuously active; slower rates intentionally produce longer held movements. See below.
-- The `smoothBezier` function (cubic ease-in/ease-out: `t² × (3 - 2t)`) curves the progression, so the value accelerates into the movement and decelerates out of it — more organic/musical than a straight line.
-- So the S&H still randomly picks targets and still uses the same glide duration, but now the path between them is curved instead of straight.
-- The Macro LFO’s S&H mode can operate as a continuous, smooth random modulation source rather than a traditional stepped sample-and-hold signal.
-- The curve is a fixed smoothstep shape rather than a fully adjustable Bézier curve. Its first derivative is zero at both endpoints, so adjacent segments meet with continuous velocity. However, it is still a fixed easing curve, not a general-purpose curve editor.
+### 10) Macro LFO motion and waveform notes
+- Smooth random (S&H) uses curved glide (`smoothBezier`) for musical motion.
+- Boundary handling uses wave-fold style through boundary waypoint logic (`shBoundary`) to reduce edge stickiness and improve full-range visitation.
+- Sine and smooth random preserve value continuity on waveform switches.
 
-### 11) Macro S&H sampling-rate scaling for longer LFO periods
-- The macro LFO Sample-and-Hold waveform samples once per complete LFO cycle. At long periods (e.g., 20 seconds), this means a new target value is selected only once every 20 seconds, which feels static.
-- To keep movement perceptually active across the full rate range, the S&H sampling cadence now scales with the period:
-  - ≤ 2 sec: 1 sample/cycle (once every 2 seconds)
-  - ≥ 20 sec: 5 samples/cycle (once every 4 seconds)
-  - Linear interpolation between
-- Added an independent `shPhase` accumulator to `macroLfoState`, separate from the triangle waveform's `phase`. `shPhase` advances at a scaled rate: `stepMs / (periodMs / multiplier)`. When `shPhase` wraps, a new target is selected and glide begins.
-- S&H feels responsive across the full rate range (300 ms–20 s) without changing the perceived glide shape or hold duration relative to each sampled target.
+### 11) Macro S&H sampling-rate scaling for longer LFO periods (corrected)
 
-## Waveform & Wave-Folding Changes (v6.9)
-
-### 1. Triangle → Sine Waveform
-Replaced the triangle waveform with a sine wave for the macro LFO. The sine wave:
-- Uses cosine-based calculation to achieve a smooth, symmetric curve
-- Maintains the same peak orientation (phase 0.5 = maximum) as the triangle it replaces
-- Provides a softer, more musical modulation curve alongside the smooth random S&H waveform
-
-### 2. Smooth Random: Reflection → Wave Folding
-Changed the S&H (Sample & Hold) random target selection from **reflection** to **wave folding**:
-
-**Previous behavior (reflection):** When a random movement would overshoot a 0..1 boundary, the algorithm would instantly "mirror" the value back. This meant overshooting the boundary was a rare event and boundary hits felt less intentional.
-
-**New behavior (wave folding):** When a random target overshoots a boundary (e.g., `0.8 + 0.25` step → `1.05`), the glide path now is in two stages:
-1. **Travels to the boundary** (`0.8 → 1.0`)
-2. **Bounces back into range** (`1.0 → 0.95`)
-
-This creates a two-segment Bezier-interpolated glide that reaches the boundaries frequently, making full modulation range accessibility common rather than rare. Both segments use smooth Bezier easing so the motion feels continuous.
-
-**Implementation:** A new `shBoundary` waypoint field tracks the boundary the glide must pass through, and `updateSampleAndHoldGlide()` splits the glide into two eased segments (from→boundary and boundary→target).
-
-### Practical rules
-- Do small chunks of work frequently instead of long blocks.
-- Avoid `helpers.delay()` for waits (it blocks while holding the lock).
-- Prefer `schedule.after()` / `schedule.every()` / `midi.at()` so work is deferred and script can return.
-- Keep paint callbacks draw-only; precompute elsewhere and render cached values.
-- High-frequency modulation should avoid expensive map/callback churn.
-
-### Applied in this preset
-- For timer-driven LFO updates, prefer `parameterMap.modulate(...)` over `set`/`updateValue`.
-- `modulate` sends live MIDI without writing map state or triggering callbacks/formatters, reducing lock-hold pressure and improving UI responsiveness.
-- For large patch parsing, use `parameterMap.transaction(...)` to coalesce map activity and avoid per-parameter callback storms during ingest.
+- The macro LFO Sample-and-Hold waveform samples new random targets at a cadence derived from the LFO period.
+- With `SH_RATE_MIN_PERIOD_MS = 2000`, `SH_RATE_MAX_PERIOD_MS = 20000`, and `SH_RATE_MAX_MULT = 4`:
+  - At or below 2 s period: multiplier = 1.0 → one sampled target per cycle (about every 2 s at 2 s period).
+  - At or above 20 s period: multiplier = 4.0 → four sampled targets per cycle (every 5 s at 20 s period).
+  - Between 2 s and 20 s: linear interpolation of the multiplier.
+- Effective S&H step interval is:
+  - `shPeriodMs = periodMs / shSampleMultiplier(periodMs)`
+- Therefore, with current code the slow-end step interval is **5 s** (not 4 s).
+- If a 4 s slow-end step interval is desired at 20 s period, `SH_RATE_MAX_MULT` must be 5.
 
 ## XY Pad Mapping: Flip, Curve, and Sync Behavior
 
-The XY pad writes two selected parameters using `PARAM_X_SELECT` and `PARAM_Y_SELECT`, with each destination defined in the `PARAM_X` / `PARAM_Y` table as:
-
+The XY pad writes two selected parameters using `PARAM_X_SELECT` and `PARAM_Y_SELECT`, with each destination defined in `PARAM_X` / `PARAM_Y` as:
 - parameter number
 - parameter type
 - maximum value (`127` for 7-bit, `16383` for 14-bit)
@@ -163,53 +114,92 @@ The XY pad writes two selected parameters using `PARAM_X_SELECT` and `PARAM_Y_SE
 ### Mapping behavior
 
 Each axis supports:
-
-- `FLIP`  
-  - `0` = normal direction
-  - `1` = reversed direction
-
-- `CURVE`  
+- `FLIP`
+  - `0` = normal
+  - `1` = reversed
+- `CURVE`
   - `0` = linear
-  - `1` = exponential
-  - `2` = logarithmic
+  - `1` = exponential-style
+  - `2` = logarithmic-style
 
-The value flow is:
-
+Value flow:
 - **Pad movement → synth parameters** via `emit()`
 - **Synth parameters → pad position** via `syncXYFromParams()`
 
-### XY write logic
-
-`emit()`:
-
-1. Reads the selected X/Y destination parameters.
-2. Reads the flip/curve settings for each axis.
-3. Converts pad position (`X`, `Y`) into normalized parameter values.
-4. Applies the destination max value (`127` or `16383`).
-5. Writes the result with `parameterMap.set()`.
-
-### XY read-back logic
-
-`syncXYFromParams()`:
-
-1. Reads the selected destination parameters.
-2. Reads current parameter values from the synth.
-3. Converts them back into pad coordinates.
-4. Applies inverse flip/curve mapping.
-5. Repaints the pad.
-
-### Current interaction model
-
-- `touchXY()` calls `emit()` so moving the pad updates the synth immediately.
-- `xyOptionChange()` also calls `emit()` so changing flip/curve updates the synth immediately using the current pad position.
-- `xySelectChange()` calls `syncXYFromParams()` so the pad dot follows the newly selected destination parameter.
+### Interaction model
+- `touchXY()` calls `emit()` so movement updates synth immediately.
+- `xyOptionChange()` also calls `emit()` so changing flip/curve updates synth immediately from current dot position.
+- `xySelectChange()` calls `syncXYFromParams()` so dot follows newly selected destination parameter.
 
 ### Notes
+- The destination max field in `PARAM_X` / `PARAM_Y` handles 7-bit vs 14-bit scaling.
+- Use nearest-integer rounding for writes.
+- Use `clamp01()` when reading back to keep dot in range.
+- `PARAM_Y = PARAM_X` is valid if both axes share destination list.
 
-- The third field in `PARAM_X` / `PARAM_Y` already handles 7-bit vs 14-bit scaling correctly.
-- `math.floor(value + 0.5)` is used when writing to round to the nearest integer.
-- `clamp01()` is used when reading values back to keep the dot position in range.
-- `PARAM_Y = PARAM_X` is acceptable if X and Y share the same destination list.
+## XY LFO (XY pad modulation) behavior and conventions
+
+The XY pad has an internal LFO that modulates pad coordinates (`X`, `Y`) before `emit()` writes selected destination parameters.
+
+### Parameters
+
+- `PARAM_XY_LFO_MODE` (`12010`)
+  - `0` Off
+  - `1` Uni+ (toward max edge)
+  - `2` Uni- (toward min edge)
+  - `3` Bipolar (around center)
+- `PARAM_XY_LFO_RATE` (`12011`): `0..255` (log-mapped period)
+- `PARAM_XY_LFO_WAVE` (`12012`): `0` Sine, `1` Smooth Random (S&H glide)
+- `PARAM_XY_LFO_DEPTH_X` (`12013`): `0..100 %`
+- `PARAM_XY_LFO_DEPTH_Y` (`12014`): `0..100 %`
+- `PARAM_XY_LFO_PHASE_Y` (`12015`): `0..360` degrees (`360` is equivalent to `0`)
+- `PARAM_XY_LFO_HOLD` (`12016`): `0/1` (pause LFO while touching XY pad when `1`)
+
+### Phase
+
+- `PARAM_XY_LFO_PHASE_Y` is interpreted as degrees:
+  - `xyLfo.phaseY = phaseDegrees / 360`
+- Useful landmarks:
+  - `0°`: X and Y in phase
+  - `90°`: quadrature (circle/ellipse-like)
+  - `180°`: inverse
+  - `270°`: opposite quadrature
+  - `360°`: same as `0°`
+
+### Depth and boundary behavior
+
+XY LFO uses **edge-aware depth scaling** to avoid boundary dwell:
+- `maxPlus = 1 - center`
+- `maxMinus = center`
+- Uni+/Uni-/Bipolar apply depth within those limits rather than hard clipping at edges.
+- This keeps depth useful across full `0..100%` range.
+
+### Hold and center semantics
+
+- On touch down:
+  - `xyLfo.userTouching = true`
+  - if Hold = 1, LFO motion pauses while manual touch updates continue.
+- On touch up:
+  - `xyLfo.userTouching = false`
+  - center updates to current dot (`centerX`, `centerY`) as new orbit center.
+- Optional `Set Center` action explicitly latches current dot position as center.
+- Center marker on the pad visualizes the current orbit center.
+
+### Smooth Random cadence (XY)
+
+With:
+- `XY_SH_RATE_MIN_PERIOD_MS = 2000`
+- `XY_SH_RATE_MAX_PERIOD_MS = 20000`
+- `XY_SH_RATE_MAX_MULT = 4`
+
+Then at long periods, S&H cadence scales up to 4x relative to cycle period (20 s period → 5 s per S&H step).
+
+### Control wiring conventions (important)
+
+- XY rate (`12011`) and XY wave (`12012`) must be different parameter numbers.
+- Do not reuse macro LFO rate formatter if it reads macro wave parameter (`PARAM_LFO_WAVE`).
+- Use an XY-specific formatter for XY rate that reads `PARAM_XY_LFO_WAVE`.
+- If rate text depends on wave (`s` vs `s/step`), force rate-display refresh when XY wave changes (bump/revert technique).
 
 ## Preset UX conventions in this repo
 
