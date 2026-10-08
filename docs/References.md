@@ -201,6 +201,53 @@ Then at long periods, S&H cadence scales up to 4x relative to cycle period (20 s
 - Use an XY-specific formatter for XY rate that reads `PARAM_XY_LFO_WAVE`.
 - If rate text depends on wave (`s` vs `s/step`), force rate-display refresh when XY wave changes (bump/revert technique).
 
+### Additional XY LFO updates (latest)
+
+#### New parameter: Random Correlation
+- `PARAM_XY_LFO_CORR` (`12018`): `0..100 %`
+  - Applies to XY Smooth Random (`PARAM_XY_LFO_WAVE = 1`) only.
+  - `0%` = fully independent X/Y random motion.
+  - `100%` = fully linked behavior (shared component), with intermediate values blending between independent and linked.
+
+#### Smooth Random is now true 2-lane XY
+- XY Smooth Random uses independent per-axis lane state:
+  - X lane: `heldRandomX`, `shFromX`, `shToX`, `shBoundaryX`
+  - Y lane: `heldRandomY`, `shFromY`, `shToY`, `shBoundaryY`
+- This replaces the earlier single-random-value behavior, producing more natural 2D motion.
+
+#### Correlation blend model (Smooth Random)
+- Let:
+  - `rx = heldRandomX`
+  - `ry = heldRandomY`
+  - `linked = 0.5 * (rx + ry)`
+- Output per axis:
+  - `Xwave = mix(rx, linked, corr)`
+  - `Ywave = mix(ry, linked, corr)`
+- Where `corr` is `PARAM_XY_LFO_CORR / 100`.
+
+#### Wave-specific control slot sharing (UI)
+- Y Phase and Random Corr share one visible UI location:
+  - Shared slot/page: `slot 22`, `page 7`
+  - Y Phase control ID: `387`
+  - Random Corr control ID: `391`
+- On wave change:
+  - Sine (`XY_LFO_SINE`): move/show Y Phase in slot 22/page 7, hide Random Corr.
+  - Smooth Random (`XY_LFO_SH`): move/show Random Corr in slot 22/page 7, hide Y Phase.
+
+#### Wave-specific applicability
+- `PARAM_XY_LFO_PHASE_Y` (`12015`) is meaningful for Sine.
+- `PARAM_XY_LFO_CORR` (`12018`) is meaningful for Smooth Random.
+- Keeping only relevant control visible reduces UI clutter and avoids misleading edits.
+
+#### Patch-load/reset conventions for XY block
+- Because some control callbacks do not fire during patch-load virtual resets, explicitly initialize XY virtual defaults in reset path:
+  - mode/rate/wave/depth/phase/hold/corr, plus X/Y select+shape options.
+- After reset defaults are written, explicitly resync XY runtime/UI state:
+  - re-apply XY LFO params,
+  - ensure scheduler state is consistent with mode,
+  - refresh wave-dependent UI placement/visibility,
+  - refresh rate label formatting if wave-dependent text is used.
+  
 ## Preset UX conventions in this repo
 
 - Patch scroll and patch select are separate controls.
