@@ -1,5 +1,5 @@
 -- Novation PEAK preset v6.14
--- 10/08/26
+-- 10/09/26
 
 local authorDate = "Kiwigrass"
 info.setText(authorDate)
@@ -1070,6 +1070,8 @@ end
 do
 -- XY_PAD CTRL ID
 local CTRL_XY_PAD = 381
+local CTRL_KNOB_X = 392
+local CTRL_KNOB_Y = 393
 
 -- State (normalized 0..1, origin bottom-left)
 local X = 0.5
@@ -1447,6 +1449,10 @@ function initXYPad()
   xYControl:setPaintCallback(paintXY)
   xYControl:setTouchCallback(touchXY)
   syncXYFromParams()
+  local knobX = controls.get(CTRL_KNOB_X)
+  local knobY = controls.get(CTRL_KNOB_Y)
+  if knobX then knobX:setPotCallback(potX) end
+  if knobY then knobY:setPotCallback(potY) end
   initXYLfo()
 end
 
@@ -1512,6 +1518,47 @@ function touchXY(control, event)
     control:repaint()
   end
 end
+
+-- ========================= XY knob control ==========================================
+local KNOB_GAIN = 1.0   -- 1.0 = turning through the knob value's full range sweeps the whole pad
+
+local function knobNormDelta(control, event)
+  local value = control:getValue(event.valueId)
+  local span = 127
+  if value then
+    span = value:getMax() - value:getMin()
+    if span <= 0 then span = 127 end
+  end
+  return (event.delta / span) * KNOB_GAIN
+end
+
+local function knobHandle(axis, control, event)
+  if event.type == DOWN then
+    xyLfo.userTouching = true
+    return
+  elseif event.type == UP then
+    xyLfo.userTouching = false
+    xyLfo.centerX, xyLfo.centerY = X, Y
+    xYControl:repaint()
+    return
+  end
+
+  if event.delta == 0 then return end
+
+  xyLfo.userTouching = true
+  local d = knobNormDelta(control, event)
+  if axis == "x" then
+    X = clamp01(X + d)
+  else
+    Y = clamp01(Y + d)
+  end
+  xyLfo.centerX, xyLfo.centerY = X, Y
+  emit()
+  xYControl:repaint()
+end
+
+function potX(control, event) knobHandle("x", control, event) end
+function potY(control, event) knobHandle("y", control, event) end
 
 function syncXYFromParams()
   local xNum = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_X_SELECT) or 0
