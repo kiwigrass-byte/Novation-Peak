@@ -526,8 +526,6 @@ end
 
 -- initialize XY pad when preset loads
 function preset.onLoad()
-  -- events to track
-  events.subscribe(PAGES | POTS)
   -- initialize XY Pad (now wrapped in its own scope)
   initXYPad()
 end
