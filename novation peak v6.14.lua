@@ -1070,8 +1070,6 @@ end
 do
 -- XY_PAD CTRL ID
 local CTRL_XY_PAD = 381
-local CTRL_KNOB_X = 392
-local CTRL_KNOB_Y = 393
 
 -- State (normalized 0..1, origin bottom-left)
 local X = 0.5
@@ -1096,9 +1094,10 @@ local PARAM_Y_FLIP   = 12003
 local PARAM_X_CURVE  = 12004
 local PARAM_Y_CURVE  = 12005
 
--- Virtual parameter numbers the XY pad writes to. {param number, param type, MIDI max}
-local PARAM_X = { [0] = {29, 2, 16383}, {79, 1, 127}, {48, 0, 127}, {43, 0, 127}, {44, 0, 127}, {80, 1, 127}, 
-                {23, 2, 16383}, {24, 2, 16383}, {25, 2, 16383}, {51, 0, 127}, {5, 1, 127} }
+-- Synth MIDI parameters the XY pad writes to. {param number, param type, MIDI max}
+local PARAM_X = { [0] = {29, 2, 16383}, {79, 1, 127}, {43, 0, 127}, {44, 0, 127},  
+                {23, 2, 16383}, {24, 2, 16383}, {25, 2, 16383}, {51, 0, 127}, {5, 1, 127}, {30, 2, 16383}, {31, 2, 16383},
+                 }
 local PARAM_Y = PARAM_X
 
 -- ===== Curve / flip helpers =====
