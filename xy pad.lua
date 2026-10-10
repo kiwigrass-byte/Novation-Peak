@@ -1,7 +1,16 @@
+-- ====================== Template for an XY Pad with LFO Modulation ================
+-- Preset compatibility check
+assert( controller.isRequired(MODEL_MK2, "5.0.0"), "MK2 fw 5.0.0 or higher required" )
+
+-- runtime environment variables. Replace with actual
+local deviceId = 1 
+local device = devices.get(deviceId)
+local port = device:getPort()
+local channel = device:getChannel()
+
 -- ========================= XY Pad + XY LFO ==========================================
 -- Description: 2-axis touch pad with optional XY LFO modulation.
 
-do
 -- XY_PAD CTRL ID
 local CTRL_XY_PAD = 19
 
@@ -11,8 +20,8 @@ local Y = 0.5
 
 local xYControl = controls.get(CTRL_XY_PAD)
 
-local XY_WIDTH = 325 -- 650
-local XY_HEIGHT = 325
+local XY_WIDTH = 340 -- 650
+local XY_HEIGHT = 340
 
 -- Colors
 local BG   = 0x000000
@@ -29,7 +38,8 @@ local PARAM_X_CURVE  = 12004
 local PARAM_Y_CURVE  = 12005
 
 -- Synth MIDI parameters the XY pad writes to. {param number, param type, MIDI max}
-local PARAM_X = { [0] = {29, 2, 16383}, {79, 1, 127}, {43, 0, 127}, {44, 0, 127},  
+-- Example shown. Replace with actual. 
+local PARAM_X = { [0] = {29, 0, 16383}, {79, 1, 127}, {43, 0, 127}, {44, 0, 127},  
                 {23, 2, 16383}, {24, 2, 16383}, {25, 2, 16383}, {51, 0, 127}, {5, 1, 127}, {30, 2, 16383}, {31, 2, 16383},
                  }
 local PARAM_Y = PARAM_X
@@ -348,7 +358,7 @@ end
 
 local CTRL_XY_PHASE_Y = 10
 local CTRL_XY_RANDOM_CORR = 4
-local XY_SHARED_SLOT = 24
+local XY_SHARED_SLOT = 34
 local XY_SHARED_PAGE = 1
 
 local function updateXyWaveUi(wave)
@@ -513,14 +523,12 @@ function xyLfoWaveChange(valueObject, value)
   schedule.after(1, xyRefreshRateDisplay)
 end
 
-end
-
--- helper to reset all XY pad params to default when a new patch is loaded 
+-- helper to reset all XY pad params to default 
 local function resetVirtualParams()
   if resetXYVirtualDefaults then resetXYVirtualDefaults() end
 end
 
--- assigns parsed synth params to preset params
+-- Reset XY pad and sync XY params when a new patch is loaded
 function assignParam()   
   resetVirtualParams()
   syncXYFromParams()
@@ -530,4 +538,5 @@ end
 function preset.onLoad()
   -- initialize XY Pad (now wrapped in its own scope)
   initXYPad()
+  resetVirtualParams()
 end
