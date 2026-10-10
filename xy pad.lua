@@ -3,7 +3,7 @@
 
 do
 -- XY_PAD CTRL ID
-local CTRL_XY_PAD = 381
+local CTRL_XY_PAD = 19
 
 -- State (normalized 0..1, origin bottom-left)
 local X = 0.5
@@ -346,10 +346,10 @@ function xyLfoSetCenter(valueObject, value)
   xyLfo.centerX, xyLfo.centerY = X, Y
 end
 
-local CTRL_XY_PHASE_Y = 387
-local CTRL_XY_RANDOM_CORR = 391
-local XY_SHARED_SLOT = 22
-local XY_SHARED_PAGE = 7
+local CTRL_XY_PHASE_Y = 10
+local CTRL_XY_RANDOM_CORR = 4
+local XY_SHARED_SLOT = 24
+local XY_SHARED_PAGE = 1
 
 local function updateXyWaveUi(wave)
   local phaseCtrl = controls.get(CTRL_XY_PHASE_Y)
