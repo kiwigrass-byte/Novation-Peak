@@ -1,4 +1,4 @@
-# XY Pad Template Quick Start
+# XY Pad and LFO Template Quick Start
 
 This is a reusable XY pad template for an Electra One MK2 preset using fw 5.0.0 or higher.
 
