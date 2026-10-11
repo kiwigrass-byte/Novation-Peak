@@ -208,20 +208,6 @@ That is safer because:
 
 ---
 
-## Important: remove the old name-cache code
-
-If the template is in use, do **not** keep an older parallel name cache in the same preset.
-
-Remove or stop using:
-- `nameBank`
-- `cleanPatchName`
-- old persistence helpers
-- old patch-name parsing inside `midi.onSysex`
-
-Otherwise two systems will fight each other.
-
----
-
 ## Testing checklist
 
 ### 1. Load test
