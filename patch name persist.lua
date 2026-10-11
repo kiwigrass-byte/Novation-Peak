@@ -1,195 +1,298 @@
---------- Patch name processing for Peak 
-local nameBank = {}    -- to store patch names of each bank
-for y = 1,4 do        -- 1 = bank A, 2= bank B, 3 = bank C, 4 = bank D
-    nameBank[y] = {}
-    for z = 0,127 do  -- patch numbers 0..127
-        nameBank[y][z] = ""
-    end
-end
+-- Preset compatibility check
+assert( controller.isRequired(MODEL_MK2, "5.0.0"), "fw 5.0.0 or higher required" )
 
--- helper function to remove empty spaces from patch names before they are stored
-local function cleanPatchName(s)
-  -- remove NULs first, then trim trailing whitespace
-  s = s:gsub("%z", "")
-  s = s:gsub("%s+$", "")
-  return s
-end
-
--- ---------- Persistence helpers for patch-name cache ----------
--- Electra One runtime in this preset:
---   persist(table)
---   recall(table)
--- We persist a tagged flat map and rebuild nameBank on load.
--- a tag to keep track of versions of patch-banks on the Peak 
-local PERSIST_TAG = "peakPatchNamesV1"
-
-local function makePatchKey(bank, patch)
-  return string.format("b%d_p%03d", bank, patch) -- bank 1..4, patch 0..127
-end
-
-local function flattenNameBank(src)
-  local flat = {}
-  local count = 0
-  for b = 1, 4 do
-    for p = 0, 127 do
-      local v = src[b] and src[b][p] or ""
-      v = tostring(v or "")
-      flat[makePatchKey(b, p)] = v
-      if v ~= "" then count = count + 1 end
-    end
-  end
-  return flat, count
-end
-
-local function inflateNameBank(flat)
-  local dst = {}
-  local count = 0
-  for b = 1, 4 do
-    dst[b] = {}
-    for p = 0, 127 do
-      local v = (flat and flat[makePatchKey(b, p)]) or ""
-      dst[b][p] = v
-      if v ~= "" then count = count + 1 end
-    end
-  end
-  return dst, count
-end
-
-local function saveNameBank()
-  local flat, count = flattenNameBank(nameBank)
-  local payload = {
-    _tag = PERSIST_TAG,
-    names = flat
-  }
-  local ok, err = pcall(persist, payload)
-  if ok then
-    print(string.format("nameBank persisted (%d non-empty names)", count))
-  else
-    print("nameBank persist failed: " .. tostring(err))
-  end
-end
-
-local function loadNameBank()
-  local payload = {}
-  local ok, err = pcall(recall, payload) -- recall(destinationTable)
-  if not ok then
-    print("nameBank recall failed: " .. tostring(err))
-    return
-  end
-  if payload._tag ~= PERSIST_TAG then
-    print("nameBank recall: no matching persisted payload tag")
-    return
-  end
-  if type(payload.names) ~= "table" then
-    print("nameBank recall: payload.names missing/invalid")
-    return
-  end
-  local rebuilt, count = inflateNameBank(payload.names)
-  nameBank = rebuilt
-  print(string.format("nameBank restored (%d non-empty names)", count))
-end
-
--- Debounced/controlled persistence during large scans
-local nameBankDirty = false
-local nameBankUpdates = 0
-local SAVE_EVERY_N_UPDATES = 128 
-
-local function markNameBankDirty()
-  nameBankDirty = true
-  nameBankUpdates = nameBankUpdates + 1
-  -- periodic checkpoint save during long scans
-  if (nameBankUpdates % SAVE_EVERY_N_UPDATES) == 0 then
-    saveNameBank()
-    nameBankDirty = false
-  end
-end
-
-local function flushNameBankIfDirty()
-  if nameBankDirty then
-    saveNameBank()
-    nameBankDirty = false
-  end
-end
-
------------------- Schedule patch scanning to extract patch name ------------------------
+-- ====================== PatchNames template ================================
+-- Edit only:
+--   1) DEVICE PROFILE
+--   2) request/response parsing functions
+--   3) host wiring (port, onLoad, onSysex, displayPatch)
 --
-local patchScanState = {
-  bank = 1,           -- current bank (1-4)
-  patch = 0,          -- current patch (0-127)
-  isRunning = false   -- scanner active flag
-}
-local SCAN_HEADER = { 0x00, 0x20, 0x29, 0x01, 0x10, 0x00, 0x7E, 0x41, 0x00, 0x00, 0x00 }
-local SCAN_PERIOD_MS = 200
-local scanHandle = nil
+-- Do not edit:
+--   engine logic below
 
-local function stopPatchScanner()
-  patchScanState.isRunning = false
-  if scanHandle ~= nil then
-    schedule.cancel(scanHandle)
-    scanHandle = nil
-  end
-  flushNameBankIfDirty()
-  print("Patch scanner stopped")
+------------------------------------------------------------
+-- SECTION 1: DEVICE PROFILE  (edit this for each synth)
+------------------------------------------------------------
+
+-- Helper for parseReply: read `len` ASCII chars from a SysEx block (1-based index)
+local function readAscii(block, startIndex, len)
+  local t = {}
+  for i = 0, len - 1 do t[#t + 1] = string.char(block:peek(startIndex + i)) end
+  return table.concat(t)
 end
 
-local function scanNextPatch()
-  if not patchScanState.isRunning then
-    return
+local PATCHNAMES_PROFILE = {
+  ---- Memory layout ----
+  banks          = 4,      -- number of banks              (e.g. 5)
+  bankBase       = 1,      -- first bank number            (0 or 1)
+  patchesPerBank = 128,    -- patches in each bank         (e.g. 100)
+  patchBase      = 0,      -- first patch number           (0 or 1)
+
+  ---- Behaviour ----
+  scanPeriodMs       = 200,   -- tick rate; one request per tick at most
+  scanReplyTimeoutMs = 750,   -- give up waiting for a reply after this
+  saveEveryN         = 128,   -- checkpoint save every N names received
+  persistTag         = "patchNamesV1", -- change per preset/layout version
+
+  ---- Request: return a table of bytes (no F0/F7 for Electra sendSysex) ----
+  buildRequest = function(bank, patch)
+    -- Peak example:
+    return { 0x00,0x20,0x29,0x01,0x10,0x00,0x7E,0x41,0x00,0x00,0x00, bank, patch }
+  end,
+
+  ---- Reply parser ----
+  -- Return bank, patch, name   when block is a patch-name reply
+  -- Return nil                 when block is anything else
+  -- bank/patch may be nil if the reply doesn't contain them; the engine
+  -- then uses the bank/patch it last requested.
+  parseReply = function(block)
+    -- Peak example:
+    if block:getLength() <= 33 then return nil end
+    if block:peek(1) ~= 0xF0 or block:peek(2) ~= 0x00 or block:peek(3) ~= 0x20
+       or block:peek(4) ~= 0x29 or block:peek(5) ~= 0x01 or block:peek(6) ~= 0x10
+       or block:peek(7) ~= 0x00 or block:peek(8) ~= 0x7E then return nil end
+    if block:peek(9) ~= 0x01 then return nil end
+    return block:peek(13), block:peek(14), readAscii(block, 17, 16)
+  end,
+}
+
+--[[ Example profile for a different synth: 5 banks x 100 patches, names
+     returned as 12 chars at offset 10, no bank/patch in the reply:
+
+  banks = 5, bankBase = 0, patchesPerBank = 100, patchBase = 1,
+  buildRequest = function(bank, patch) return { 0x00,0x21,0x22, 0x10, bank, patch } end,
+  parseReply = function(block)
+    if block:peek(2) ~= 0x00 or block:peek(3) ~= 0x21 or block:peek(4) ~= 0x22 then return nil end
+    if block:peek(5) ~= 0x11 then return nil end
+    return nil, nil, readAscii(block, 10, 12)
+  end,
+]]
+
+------------------------------------------------------------
+-- SECTION 2: ENGINE  (do not edit)
+------------------------------------------------------------
+local PatchNames = (function(CONFIG)
+  local M = {}
+
+  local lastBank  = CONFIG.bankBase + CONFIG.banks - 1
+  local lastPatch = CONFIG.patchBase + CONFIG.patchesPerBank - 1
+
+  local state = {
+    getPort = nil,
+    names = {},
+    dirty = false,
+    updateCount = 0,
+    onScanComplete = nil,
+    onNameUpdated = nil,
+    scan = { running = false, finished = false, bank = 0, patch = 0, handle = nil,
+             pending = false, startedAt = 0, reqBank = nil, reqPatch = nil },
+  }
+
+  local function clean(s)
+    s = tostring(s or "")
+    s = s:gsub("%z", "")
+    s = s:gsub("[^\32-\126]", "")
+    s = s:gsub("%s+$", "")
+    return s
   end
-  local bank = patchScanState.bank
-  local patch = patchScanState.patch
-  local msg = concat(SCAN_HEADER, {bank, patch})
-  midi.sendSysex(port, msg)
-  print(string.format(
-    "Requesting Bank %d, Patch %03d",
-    bank,
-    patch
-  ))
-  patchScanState.patch = patch + 1
-  if patchScanState.patch >= 128 then
-    patchScanState.patch = 0
-    patchScanState.bank = patchScanState.bank + 1
-    if patchScanState.bank > 4 then
-      patchScanState.bank = 1
-      print("Patch scanner cycle complete")
-      stopPatchScanner()
-      parameterMap.set(deviceId, PT_VIRTUAL, 10024, 0)
+
+  local function validBank(b)  return type(b) == "number" and b >= CONFIG.bankBase  and b <= lastBank  end
+  local function validPatch(p) return type(p) == "number" and p >= CONFIG.patchBase and p <= lastPatch end
+  local function key(b, p) return string.format("b%d_p%03d", b, p) end
+
+  local function resetNames()
+    state.names = {}
+    for b = CONFIG.bankBase, lastBank do
+      state.names[b] = {}
+      for p = CONFIG.patchBase, lastPatch do state.names[b][p] = "" end
     end
   end
-end
+
+  local function save()
+    local flat, count = {}, 0
+    for b = CONFIG.bankBase, lastBank do
+      for p = CONFIG.patchBase, lastPatch do
+        local v = state.names[b][p]
+        flat[key(b, p)] = v
+        if v ~= "" then count = count + 1 end
+      end
+    end
+    local payload = { _tag = CONFIG.persistTag, banks = CONFIG.banks,
+                      patches = CONFIG.patchesPerBank, names = flat }
+    local ok, err = pcall(persist, payload)
+    print(ok and string.format("PatchNames saved (%d names, %d updates this session)", count, state.updateCount)
+          or ("PatchNames save failed: " .. tostring(err)))
+    state.dirty = false
+  end
+
+  local function markDirty()
+    state.dirty = true
+    state.updateCount = state.updateCount + 1
+    if state.updateCount % CONFIG.saveEveryN == 0 then save() end
+  end
+
+  function M.init(opts)
+    opts = opts or {}
+    state.getPort = opts.getPort
+    state.onScanComplete = opts.onScanComplete
+    state.onNameUpdated = opts.onNameUpdated
+    resetNames()
+  end
+
+  function M.load()
+    local payload = {}
+    local ok, err = pcall(recall, payload)
+    if not ok then print("PatchNames recall failed: " .. tostring(err)) return end
+    if payload._tag ~= CONFIG.persistTag or payload.banks ~= CONFIG.banks
+       or payload.patches ~= CONFIG.patchesPerBank or type(payload.names) ~= "table" then
+      print("PatchNames recall: no matching saved data")
+      return
+    end
+    local count = 0
+    for b = CONFIG.bankBase, lastBank do
+      for p = CONFIG.patchBase, lastPatch do
+        local v = payload.names[key(b, p)] or ""
+        state.names[b][p] = v
+        if v ~= "" then count = count + 1 end
+      end
+    end
+    print(string.format("PatchNames restored (%d names)", count))
+  end
+
+  function M.get(bank, patch)
+    if not validBank(bank) or not validPatch(patch) then return "" end
+    return state.names[bank][patch] or ""
+  end
+
+  function M.handleSysex(block)
+    local ok, bank, patch, raw = pcall(CONFIG.parseReply, block)
+    if not ok then
+      print("PatchNames parseReply error: " .. tostring(bank))
+      return false
+    end
+    if raw == nil then return false end          -- not a patch-name reply
+
+    -- fall back to the last requested bank/patch if the reply doesn't carry them
+    if bank == nil  then bank  = state.scan.reqBank  end
+    if patch == nil then patch = state.scan.reqPatch end
+    if not validBank(bank) or not validPatch(patch) then return true end
+
+    local name = clean(raw)
+    state.names[bank][patch] = name
+    markDirty()
+    state.scan.pending = false
+    if state.onNameUpdated then state.onNameUpdated(bank, patch, name) end
+    return true
+  end
+
+  function M.stopScan()
+    local s = state.scan
+    s.running, s.pending = false, false
+    if s.handle then schedule.cancel(s.handle) s.handle = nil end
+    if state.dirty then save() end
+  end
+
+  local function finishScan()
+    M.stopScan()
+    if state.onScanComplete then state.onScanComplete() end
+  end
+
+  local function tick()
+    local s = state.scan
+    if not s.running then return end
+
+    if s.pending then
+      if controller.uptime() - s.startedAt < CONFIG.scanReplyTimeoutMs then return end
+      s.pending = false                           -- timed out, move on
+    end
+    if s.finished then finishScan() return end    -- last reply (or timeout) done
+
+    local port = state.getPort and state.getPort()
+    if port == nil then
+      print("PatchNames: no port, stopping scan")
+      M.stopScan()
+      return
+    end
+
+    s.reqBank, s.reqPatch = s.bank, s.patch
+    midi.sendSysex(port, CONFIG.buildRequest(s.bank, s.patch))
+    s.pending, s.startedAt = true, controller.uptime()
+
+    s.patch = s.patch + 1
+    if s.patch > lastPatch then
+      s.patch = CONFIG.patchBase
+      s.bank = s.bank + 1
+      if s.bank > lastBank then s.finished = true end
+    end
+  end
+
+  function M.startScan()
+    local s = state.scan
+    if s.running then return end
+    s.running, s.finished, s.pending = true, false, false
+    s.bank, s.patch = CONFIG.bankBase, CONFIG.patchBase
+    s.handle = schedule.every(CONFIG.scanPeriodMs, tick)
+  end
+
+  function M.save() save() end
+
+  return M
+end)(PATCHNAMES_PROFILE)
+
+------------------------------------------------------------
+-- SECTION 3: HOST WIRING  (adapt per synth)
+------------------------------------------------------------
+local deviceId = 1 -- the device ID used in the E1 preset
+local device = devices.get(deviceId)
+local port = device:getPort()
+local channel = device:getChannel()
+
+-- Put this AFTER your port/device variables exist.
+PatchNames.init{
+  getPort = function() return port end,
+  onScanComplete = function()
+    -- e.g. reset the "scan" button parameter in your preset
+    parameterMap.set(deviceId, PT_VIRTUAL, 10024, 0)
+  end,
+--  optional print:
+--  onNameUpdated = function(bank, patch, name) 
+--     print("name", bank, patch, name)
+--  end,
+}
+
+-- 1. In your scan button's Lua callback:
+--      function startPatchScanner(valueObject, value)
+--        if value ~= 0 then PatchNames.startScan() end
+--      end
+-- 2. At the top of your existing midi.onSysex:
+--      if PatchNames.handleSysex(sysexBlock) then return end
+-- 3. In your existing preset.onLoad:
+--      PatchNames.load()
+-- 4. To show a name:   PatchNames.get(bank, patch)
+
+
+-- The following example and Bank and Patch Number controls are for the Novation Peak only.
 
 function startPatchScanner(valueObject, value)
-  if value == 0 then
-    return
-  end
-  if patchScanState.isRunning then
-    print("Patch scanner already running")
-    return
-  end
-  patchScanState.isRunning = true
-  patchScanState.bank = 1
-  patchScanState.patch = 0
-  print("Starting patch scanner: 4 banks × 128 patches")
-  scanHandle = schedule.every( SCAN_PERIOD_MS, scanNextPatch  )
+  if value ~= 0 then PatchNames.startScan() end
 end
 
------------------------------ midi receive function to read Peak patch name ----------------------------------------
 function midi.onSysex(midiInput, sysexBlock)
-  -- add code to parse an incoming patch sysEx message 
-  -- a stored patch received and the patch name placed in nameBank[bankNum][patchNum]
-  -- following is example only
-  local bankNum = sysexBlock:peek(13)
-  local patchNum = sysexBlock:peek(14)
-  print("bank ".. math.floor(bankNum).."  patch " ..math.floor(patchNum).." received")
-  local rawName = ""
-  for i = 0,15 do
-    rawName = rawName .. string.char(sysexBlock:peek(17+i))
-  end
-  nameBank[bankNum][patchNum] = cleanPatchName(rawName)
-  markNameBankDirty()
+  if PatchNames.handleSysex(sysexBlock) then return end
+  -- other SysEx handling goes here
 end
 
 function preset.onLoad()
   -- load persisted name data if created
-  loadNameBank()
+  PatchNames.load()
+end
+
+local CTRL_PATCH_NUMBER = 4 -- the Patch Number Control ID #
+
+function displayPatch(valueObject, value)
+  local bankTxt = {"A","B","C","D"}
+  local bankNum = parameterMap.get(deviceId, PT_VIRTUAL, 10032)
+  local patchName = PatchNames.get(bankNum, value)
+  controls.get(CTRL_PATCH_NUMBER):setName(patchName)
+  return bankTxt[bankNum] .. " " .. string.format("%03d", value)
 end
