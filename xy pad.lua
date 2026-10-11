@@ -28,7 +28,7 @@ local CFG = {
   xyResetParam    = 12019,
 }
 
--- Synth MIDI parameters the XY pad controls
+-- Example synth MIDI parameters the XY pad modulates: {param number, type, max MIDI value}
 local PARAM_X = {
   [0] = {29, 2, 16383}, {79, 1, 127}, {43, 0, 127}, {44, 0, 127},
   {23, 2, 16383}, {24, 2, 16383}, {25, 2, 16383}, {51, 0, 127},
@@ -594,7 +594,6 @@ do
   -- Momentary reset: fires on press, ignores release
   function xyReset(valueObject, value)
     if value == 0 then return end
-
     -- stop the LFO and clear its runtime state
     xyLfoStop()
     xyLfo.phase = 0.0
@@ -604,16 +603,13 @@ do
     xyLfo.shToX, xyLfo.shToY = 0.5, 0.5
     xyLfo.shBoundaryX, xyLfo.shBoundaryY = nil, nil
     xyLfo.userTouching = false
-
     -- reset all XY parameters to their defaults
     resetXYVirtualDefaults()
     xyLfoApplyParams()
     updateXyWaveUi(xyLfo.waveform)
-
     -- center the dot and send the centered values to the synth
     centerXYPad()
     emit()
-
     -- refresh the rate display, since its text depends on the waveform
     schedule.after(1, xyRefreshRateDisplay)
   end
