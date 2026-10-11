@@ -1,6 +1,11 @@
 -- Preset compatibility check
 assert( controller.isRequired(MODEL_MK2, "5.0.0"), "fw 5.0.0 or higher required" )
 
+-- Declare device and port 
+local deviceId = 1 -- the device ID used in the E1 preset
+local device = devices.get(deviceId)
+local port = device:getPort()
+
 -- ====================== PatchNames template ================================
 -- Edit only:
 --   1) DEVICE PROFILE
@@ -242,11 +247,6 @@ end)(PATCHNAMES_PROFILE)
 ------------------------------------------------------------
 -- SECTION 3: HOST WIRING  (adapt per synth)
 ------------------------------------------------------------
-local deviceId = 1 -- the device ID used in the E1 preset
-local device = devices.get(deviceId)
-local port = device:getPort()
-local channel = device:getChannel()
-
 -- Put this AFTER your port/device variables exist.
 PatchNames.init{
   getPort = function() return port end,
