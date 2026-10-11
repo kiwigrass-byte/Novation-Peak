@@ -175,27 +175,18 @@ end
 
 ----------------------------- midi receive function to read Peak patch name ----------------------------------------
 function midi.onSysex(midiInput, sysexBlock)
-  local function isPeak()
-    return sysexBlock:peek(1) == 0xF0 and sysexBlock:peek(2) == 0x00
-       and sysexBlock:peek(3) == 0x20 and sysexBlock:peek(4) == 0x29
-       and sysexBlock:peek(5) == 0x01 and sysexBlock:peek(6) == 0x10
-       and sysexBlock:peek(7) == 0x00 and sysexBlock:peek(8) == 0x7E
-  end
-  if not isPeak() then return end
-  local cmd = sysexBlock:peek(9)
-  local len = sysexBlock:getLength()
+  -- add code to parse an incoming patch sysEx message 
   -- a stored patch received and the patch name placed in nameBank[bankNum][patchNum]
-  if len > 33 and cmd == 0x01 then 
-    local bankNum = sysexBlock:peek(13)
-    local patchNum = sysexBlock:peek(14)
-    print("bank ".. math.floor(bankNum).."  patch " ..math.floor(patchNum).." received")
-    local rawName = ""
-    for i = 0,15 do
-      rawName = rawName .. string.char(sysexBlock:peek(17+i))
-    end
-    nameBank[bankNum][patchNum] = cleanPatchName(rawName)
-    markNameBankDirty()
+  -- following is example only
+  local bankNum = sysexBlock:peek(13)
+  local patchNum = sysexBlock:peek(14)
+  print("bank ".. math.floor(bankNum).."  patch " ..math.floor(patchNum).." received")
+  local rawName = ""
+  for i = 0,15 do
+    rawName = rawName .. string.char(sysexBlock:peek(17+i))
   end
+  nameBank[bankNum][patchNum] = cleanPatchName(rawName)
+  markNameBankDirty()
 end
 
 function preset.onLoad()
