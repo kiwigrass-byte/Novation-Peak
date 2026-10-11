@@ -28,6 +28,14 @@ local CFG = {
   xyResetParam    = 12019,
 }
 
+-- Synth MIDI parameters the XY pad controls
+local PARAM_X = {
+  [0] = {29, 2, 16383}, {79, 1, 127}, {43, 0, 127}, {44, 0, 127},
+  {23, 2, 16383}, {24, 2, 16383}, {25, 2, 16383}, {51, 0, 127},
+  {5, 1, 127}, {30, 2, 16383}, {31, 2, 16383},
+}
+local PARAM_Y = PARAM_X
+
 local deviceId = CFG.deviceId
 
 local function safeControl(id)
@@ -45,14 +53,6 @@ local function safeParamGet(pType, pNum, default)
   end
   return v
 end
-
--- Synth MIDI parameters the XY pad controls
-local PARAM_X = {
-  [0] = {29, 2, 16383}, {79, 1, 127}, {43, 0, 127}, {44, 0, 127},
-  {23, 2, 16383}, {24, 2, 16383}, {25, 2, 16383}, {51, 0, 127},
-  {5, 1, 127}, {30, 2, 16383}, {31, 2, 16383},
-}
-local PARAM_Y = PARAM_X
 
 do
   local CTRL_XY_PAD = CFG.xyPadCtrl
