@@ -1,3 +1,4 @@
+<img width="1024" height="600" alt="scrn000 (1)" src="https://github.com/user-attachments/assets/3c584aff-3c6f-42f0-bf84-996bb757ed80" />
 # XY Pad and LFO Template Quick Start
 
 This is a reusable XY pad template for an Electra One MK2 preset using fw 5.0.0 or higher.
