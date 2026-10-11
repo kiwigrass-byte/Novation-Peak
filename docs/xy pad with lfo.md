@@ -1,43 +1,16 @@
-# XY Pad Template for Electra One / Novation Peak
+# XY Pad Template Quick Start
 
-This template provides a reusable XY pad controller with:
-- 2-axis pad input
-- optional LFO modulation on X and Y
-- per-axis flip and curve shaping
-- LFO rate / waveform / depth / phase controls
-- live scope display for both traces
-- reset behavior and virtual parameter defaults
-
-It was designed to be adapted to a custom preset by swapping in the target synth parameters and control IDs.
+This is a reusable XY pad template for an Electra One preset.
 
 ## 1. What it does
 
-The pad works like a normalized 2D controller:
+- 2D pad with X/Y output
+- LFO modulation on both axes
+- per-axis flip and curve shaping
+- live scope
+- reset behavior
 
-- X and Y are stored as values from 0.0 to 1.0
-- the values are mapped to actual synth parameters
-- optional LFO modulation offsets the position around a center point
-- each axis supports:
-  - flip
-  - curve shaping
-  - independent depth
-  - optional hold-on-touch behavior
-- a scope shows the live X/Y movement for debugging and visual feedback
-
-This is useful for:
-- assignable synth controls like cutoff + resonance
-- filter mix / pan combinations
-- morphing between modulation targets
-- any 2D CV-like control surface
-
----
-
-## 2. Required wiring
-
-The template expects a few things to exist in the preset:
-
-### Control IDs
-These are configured in `CFG`:
+## 2. Required config
 
 ```lua
 local CFG = {
@@ -66,20 +39,28 @@ local CFG = {
   xyLfoCorrParam   = 12018,
   xyResetParam     = 12019,
 }
-3. Target parameter map
-Lua
+```
+
+## 3. Target parameter map
+
+```lua
 local PARAM_X = {
   [0] = {29, 2, 16383},
   [1] = {79, 1, 127},
 }
 
 local PARAM_Y = PARAM_X
+```
+
 Each entry is:
 
-Lua
+```lua
 { parameterNumber, parameterType, maxMidiValue }
-4. Write function
-Lua
+```
+
+## 4. Write function
+
+```lua
 local function emit()
   local xNum = safeParamGet(PT_VIRTUAL, PARAM_X_SELECT, 0)
   local yNum = safeParamGet(PT_VIRTUAL, PARAM_Y_SELECT, 1)
@@ -94,9 +75,11 @@ local function emit()
   parameterMap.set(deviceId, xd[2], xd[1], math.floor(xn * xd[3] + 0.5))
   parameterMap.set(deviceId, yd[2], yd[1], math.floor(yn * yd[3] + 0.5))
 end
-5. LFO tick
+```
 
-Lua
+## 5. LFO tick
+
+```lua
 local function xyLfoTick()
   if not xyLfo.isRunning or xyLfo.mode == XY_LFO_OFF then return end
   if xyLfo.holdOnTouch == 1 and xyLfo.userTouching then return end
@@ -122,8 +105,11 @@ local function xyLfoTick()
   xyEmitAndRepaint()
   pushScopeSample()
 end
-6. Scope update
-Lua
+```
+
+## 6. Scope update
+
+```lua
 local function pushScopeSample()
   for i = 1, SCOPE_WIDTH - 1 do
     scope.x[i] = scope.x[i + 1]
@@ -138,8 +124,11 @@ local function pushScopeSample()
     if scopeControl then scopeControl:repaint() end
   end
 end
-7. Reset
-Lua
+```
+
+## 7. Reset
+
+```lua
 function xyReset(valueObject, value)
   if value == 0 then return end
 
@@ -158,10 +147,14 @@ function xyReset(valueObject, value)
   emit()
   initializeScopeData()
 end
-8. Porting checklist
-replace PARAM_X and PARAM_Y
-update all control IDs in CFG
-tune LFO depth / rate / phase
-check whether your target params are CC7 or CC14
-test reset and scope behavior
+```
+
+## 8. Porting checklist
+
+- replace `PARAM_X` and `PARAM_Y`
+- update all control IDs in `CFG`
+- tune LFO depth / rate / phase
+- check whether your target params are CC7 or CC14
+- test reset and scope behavior
+
 This is the easiest version to copy into a preset and adapt.
