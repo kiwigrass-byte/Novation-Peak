@@ -51,10 +51,7 @@ local PARAM_X = {
 }
 local PARAM_Y = PARAM_X
 
-Each entry is:
-
-```lua
-{ parameterNumber, parameterType, maxMidiValue }
+-- Each entry is: { parameterNumber, parameterType, maxMidiValue }
 
 -- Default values the X/Y target params return to on Reset
 local PARAM_X_DEFAULT = 64
