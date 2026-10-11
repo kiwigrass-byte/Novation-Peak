@@ -8,6 +8,7 @@ local CFG = {
   xyPadCtrl = 19,
   phaseYCtrl = 10,
   corrCtrl = 4,
+  scopeCtrl = 25,
 
   xSelectParam = 12000,
   ySelectParam = 12001,
@@ -29,8 +30,11 @@ local CFG = {
 }
 
 -- Example synth MIDI parameters the XY pad modulates: {param number, type, max MIDI value}
-local PARAM_X = { [0] = {29, 2, 16383}, {79, 1, 127}, }
+local PARAM_X = { [0] = {29, 1, 127}, {79, 1, 127}, }
 local PARAM_Y = PARAM_X
+-- Default values the X/Y target params return to on Reset
+local PARAM_X_DEFAULT = 64
+local PARAM_Y_DEFAULT = 64
 
 local deviceId = CFG.deviceId
 
@@ -307,13 +311,100 @@ do
     if xYControl then xYControl:repaint() end
   end
 
+  -- ============ XY LFO scope (X and Y traces) ============
+
+  local g = graphics
+
+  local SCOPE_WIDTH  = 150
+  local SCOPE_HEIGHT = 80
+  local SCOPE_X_COLOR = BLUE
+  local SCOPE_Y_COLOR = PURPLE
+
+  local scopeControl = safeControl(CFG.scopeCtrl)
+  local scope = { x = {}, y = {} }
+  local scopeRepaintDiv = 3
+  local scopeRepaintCount = 0
+
+  local function initializeScopeData()
+    for i = 1, SCOPE_WIDTH do
+      scope.x[i] = 0
+      scope.y[i] = 0
+    end
+  end
+
+  -- 0..1 -> -1..1
+  local function unitToBipolar(v)
+    return clamp01(v) * 2 - 1
+  end
+
+  -- Map normalized [-1,1] to pixel Y inside the scope rect
+  local function normToPixel(n, top, bottom)
+    local center = (top + bottom) * 0.5
+    local amp    = (bottom - top) * 0.5
+    return math.floor(center - n * amp + 0.5)
+  end
+
+  local function pushScopeSample()
+    for i = 1, SCOPE_WIDTH - 1 do
+      scope.x[i] = scope.x[i + 1]
+      scope.y[i] = scope.y[i + 1]
+    end
+    scope.x[SCOPE_WIDTH] = unitToBipolar(X)
+    scope.y[SCOPE_WIDTH] = unitToBipolar(Y)
+
+    scopeRepaintCount = scopeRepaintCount + 1
+    if scopeRepaintCount >= scopeRepaintDiv then
+      scopeRepaintCount = 0
+      if scopeControl then scopeControl:repaint() end
+    end
+  end
+
+  local function drawTrace(data, color, left, right, top, bottom)
+    g.setColor(color)
+    local lastx = left
+    local lasty = normToPixel(data[1] or 0, top, bottom)
+    for x = 2, math.min(SCOPE_WIDTH, right - left + 1) do
+      local px = left + x - 1
+      local py = normToPixel(data[x] or 0, top, bottom)
+      g.drawLine(lastx, lasty, px, py)
+      lastx, lasty = px, py
+    end
+  end
+
+  function paintScope(control, value)
+    if not control then return end
+    local b = control:getBounds()
+    local w, h = b[WIDTH], b[HEIGHT]
+    local left, right = 4, w - 5
+    local top, bottom = 4, h - 5
+
+    g.setColor(0x000000); g.fillRect(0, 0, w, h)
+    g.setColor(0x808080); g.drawRoundRect(0, 0, w, h, 5)
+
+    local mid = normToPixel(0, top, bottom)
+    g.drawLine(left, mid, right, mid)
+
+    drawTrace(scope.x, SCOPE_X_COLOR, left, right, top, bottom)
+    drawTrace(scope.y, SCOPE_Y_COLOR, left, right, top, bottom)
+  end
+
+  local function initScope()
+    if not scopeControl then scopeControl = safeControl(CFG.scopeCtrl) end
+    if not scopeControl then return end
+    local bounds = scopeControl:getBounds()
+    bounds[WIDTH]  = SCOPE_WIDTH
+    bounds[HEIGHT] = SCOPE_HEIGHT
+    scopeControl:setBounds(bounds)
+    initializeScopeData()
+    scopeControl:setPaintCallback(paintScope)
+    scopeControl:repaint()
+  end
+
   local function xyLfoTick()
     if not xyLfo.isRunning or xyLfo.mode == XY_LFO_OFF then return end
     if xyLfo.holdOnTouch == 1 and xyLfo.userTouching then return end
-
     xyLfo.phase = xyLfo.phase + (xyLfo.stepMs / xyLfo.periodMs)
     while xyLfo.phase >= 1 do xyLfo.phase = xyLfo.phase - 1 end
-
     if xyLfo.waveform == XY_LFO_SH then
       local shPeriodMs = xyLfo.periodMs / xyShSampleMultiplier(xyLfo.periodMs)
       xyLfo.shPhase = xyLfo.shPhase + (xyLfo.stepMs / shPeriodMs)
@@ -323,13 +414,12 @@ do
       end
       xyUpdateSHGlide()
     end
-
     local wx = xyWaveAtPhase(xyLfo.phase, "x")
     local wy = xyWaveAtPhase(xyLfo.phase + xyLfo.phaseY, "y")
     X = xyApplyDepth(xyLfo.centerX, wx, xyLfo.depthX, xyLfo.mode)
     Y = xyApplyDepth(xyLfo.centerY, wy, xyLfo.depthY, xyLfo.mode)
-
     xyEmitAndRepaint()
+    pushScopeSample()
   end
 
   local function xyLfoStopScheduler()
@@ -436,6 +526,7 @@ do
     xYControl:setPaintCallback(paintXY)
     xYControl:setTouchCallback(touchXY)
 
+    initScope()
     initXYLfo()
   end
 
@@ -452,11 +543,9 @@ do
     parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_XY_LFO_PHASE_Y, 90)
     parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_XY_LFO_HOLD, 1)
     parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_XY_LFO_CORR, 0)
-    parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_XY_LFO_DEPTH_X, 35)
-    parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_XY_LFO_DEPTH_Y, 35)
+    parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_XY_LFO_DEPTH_X, 50)
+    parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_XY_LFO_DEPTH_Y, 50)
   end
-
-  local g = graphics
 
   function paintXY(control, value)
     if not control then return end
@@ -485,8 +574,6 @@ do
   end
 
   function touchXY(control, event)
-    if not control then return end
-
     if event.type == DOWN then
       xyLfo.userTouching = true
     elseif event.type == UP then
@@ -499,6 +586,7 @@ do
       X = math.max(0, math.min(1, event.x / b[WIDTH]))
       Y = math.max(0, math.min(1, 1 - event.y / b[HEIGHT]))
       emit()
+      pushScopeSample()
       control:repaint()
     end
   end
@@ -593,57 +681,20 @@ do
     xyLfoApplyParams()
     updateXyWaveUi(xyLfo.waveform)
     emit()
+    resetXYVirtualDefaults()
+    xyLfoApplyParams()
+    updateXyWaveUi(xyLfo.waveform)
+    -- reset the target params (select params are now 0 -> X, 1 -> Y)
+    local xd = PARAM_X[0]  
+    local yd = PARAM_Y[1]  
+    parameterMap.set(deviceId, xd[2], xd[1], PARAM_X_DEFAULT)
+    parameterMap.set(deviceId, yd[2], yd[1], PARAM_Y_DEFAULT)
+    -- move the pad dot and LFO center to match the params
+    syncXYFromParams()
+    initializeScopeData()
+    if scopeControl then scopeControl:repaint() end    
     -- refresh the rate display, since its text depends on the waveform
     schedule.after(1, xyRefreshRateDisplay)
-  end
-
-  -- =============== Callback to draw the scope graphics ==================
-
-  -- ---------------- LFO scope state ----------------
-  local SCOPE_WIDTH = 140
-  local SCOPE_HEIGHT = 140
-  local CTRL_LFO_SCOPE = 25
-
-  local scopeControl = controls.get(CTRL_LFO_SCOPE)
-
-  local scope = {
-    y = {}
-  }
-
-  local scopeRepaintDiv = 3
-  local scopeRepaintCount = 0
-
-  -- Map normalized [-1,1] to pixel Y inside the scope rect
-  local function normToPixel(n, top, bottom)
-    local center = (top + bottom) * 0.5
-    local amp    = (bottom - top) * 0.5
-    return math.floor(center - n * amp + 0.5)
-  end
-
-  function paintScope(control, value)
-    local bounds = control:getBounds()
-    local left   = 0
-    local right  = bounds[WIDTH] - 1
-    local top    = 0
-    local bottom = bounds[HEIGHT] - 1
-    -- Clear the Control's bounding box
-    g.setColor(0x000000)
-    g.fillRect(0, 0, bounds[WIDTH], bounds[HEIGHT])
-    g.setColor(0x808080) -- mid gray
-    g.drawRoundRect(0, 0, bounds[WIDTH], bounds[HEIGHT], 5)
-    -- midline
-    g.setColor(0x808080)
-    local mid = normToPixel(0, top + 4, bottom - 4)
-    g.drawLine(left + 4, mid, right - 4, mid)
-    -- signal trace
-    g.setColor(ORANGE)
-    local lastx = left + 4
-    local lasty = normToPixel(scope.y[1], top + 4, bottom - 4)
-    for x = 2, math.min(SCOPE_WIDTH - 4, right - 4) do
-      local y = normToPixel(scope.y[x], top + 4, bottom - 4)
-      g.drawLine(lastx, lasty, x, y)
-      lastx, lasty = x, y
-    end
   end
 
 end
