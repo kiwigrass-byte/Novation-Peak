@@ -55,10 +55,7 @@ Each entry is:
 
 ```lua
 { parameterNumber, parameterType, maxMidiValue }
-```
-Set default parameter values
 
-```lua
 -- Default values the X/Y target params return to on Reset
 local PARAM_X_DEFAULT = 64
 local PARAM_Y_DEFAULT = 64
