@@ -1,6 +1,6 @@
 # XY Pad Template Quick Start
 
-This is a reusable XY pad template for an Electra One preset.
+This is a reusable XY pad template for an Electra One MK2 preset using fw 5.0.0 or higher.
 
 ## 1. What it does
 
@@ -44,12 +44,17 @@ local CFG = {
 ## 3. Target parameter map
 
 ```lua
+-- Example synth MIDI parameters the XY pad modulates
 local PARAM_X = {
-  [0] = {29, 2, 16383},
+  [0] = {29, 1, 127},
   [1] = {79, 1, 127},
 }
-
 local PARAM_Y = PARAM_X
+
+-- Default values the X/Y target params return to on Reset
+local PARAM_X_DEFAULT = 64
+local PARAM_Y_DEFAULT = 64
+
 ```
 
 Each entry is:
@@ -151,10 +156,8 @@ end
 
 ## 8. Porting checklist
 
-- replace `PARAM_X` and `PARAM_Y`
 - update all control IDs in `CFG`
-- tune LFO depth / rate / phase
-- check whether your target params are CC7 or CC14
-- test reset and scope behavior
-
-This is the easiest version to copy into a preset and adapt.
+- replace `PARAM_X` and `PARAM_Y`. The list contains only two possible target params but could be many. The two displayed are just an example so you can see them move. 
+- check whether your target params are CC7, CC14, NRPN, VIRTUAL and what their default values are
+- tune default LFO depth / rate / phase
+- test reset and scope behavior. You can resize the SCOPE _WIDTH and SCOPE_DEPTH to fit with your layout.
