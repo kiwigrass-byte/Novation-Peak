@@ -1,6 +1,7 @@
-# CompareIt Quick Start
+# Compare It Quick Start
 
-This preset includes a reusable `CompareIt` Lua template for A/B compare on the Novation Peak.
+This preset includes a reusable `Compare It` Lua template for A/B comparison of a stored patch with your edited version.
+The preset is illustrated using the Novation Peak 
 
 ## What it does
 
