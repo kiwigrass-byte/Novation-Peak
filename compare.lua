@@ -24,8 +24,6 @@ compareApplying = false -- true while the engine writes to the parameterMap
 ------------------------------------------------------------
 -- SECTION 1: DEVICE PROFILE (Peak example)
 ------------------------------------------------------------
--- The Peak has a mixture of CC7, CC14 and NRPN parameters and parameter numbers **DO NOT** uniquely identify all parameters
--- PATCH_PARAM_MAP maps a patch byte to a preset parameter type and value: {byte #, parameter type, parameter #}.  Used by assignParam() and the A/B compare logic
 -- The Peak has a mixture of CC7, CC14 and NRPN parameters and parameter numbers **DO NOT** uniquely identify all parameters 
 -- PATCH_PARAM_MAP maps a patch byte to a preset parameter type and value: {byte #, parameter type, parameter #}.  Used by assignParam() and the A/B comapre logic
 local PATCH_PARAM_MAP = {
