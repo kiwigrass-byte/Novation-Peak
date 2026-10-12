@@ -1,12 +1,31 @@
--- ------------------ COMPARE_IT toggle block -----------------------------------
--- A = parsed edit-buffer state (captured once per patch parse)
--- B = live/edited parameter state (captured on demand when comparing)
+-- Preset compatibility: fw 5.0.0 or higher
+-- ====================== CompareIt template ================================
+-- Edit only:
+--   1) DEVICE PROFILE (SECTION 1)
+--   2) host wiring (SECTION 3)
+-- Do not edit: the engine in SECTION 2.
 --
--- value 1: cache current live state as B, then push A into parameterMap
--- value 0: push cached B back into parameterMap
+-- A = state when the patch was loaded (captured by CompareIt.captureA())
+-- B = live/edited state (captured when COMPARE_IT is switched on)
+-- ON : cache live state as B, then push A into the parameterMap
+-- OFF: push cached B back into the parameterMap
+--
+-- To use in another preset:
+--   1) Create a virtual control for COMPARE_IT (toggle, 0/1) and set its Lua callback to compareIt.
+--   2) Fill in COMPARE_PROFILE.params (or buildParams) with {parameterType, parameterNumber} pairs.
+--   3) Call CompareIt.reset() then CompareIt.captureA() after every patch load.
+--      With no SysEx dump, leave readA = nil: A is the parameterMap state at captureA() time.
+--   4) In onChange handlers that must ignore engine writes: if compareApplying then return end
 
+local deviceId = 1 -- the device ID used in the E1 preset
 local PARAM_COMPARE_IT = 10037
+compareApplying = false -- true while the engine writes to the parameterMap
 
+------------------------------------------------------------
+-- SECTION 1: DEVICE PROFILE (Peak example)
+------------------------------------------------------------
+-- The Peak has a mixture of CC7, CC14 and NRPN parameters and parameter numbers **DO NOT** uniquely identify all parameters
+-- PATCH_PARAM_MAP maps a patch byte to a preset parameter type and value: {byte #, parameter type, parameter #}.  Used by assignParam() and the A/B compare logic
 -- The Peak has a mixture of CC7, CC14 and NRPN parameters and parameter numbers **DO NOT** uniquely identify all parameters 
 -- PATCH_PARAM_MAP maps a patch byte to a preset parameter type and value: {byte #, parameter type, parameter #}.  Used by assignParam() and the A/B comapre logic
 local PATCH_PARAM_MAP = {
@@ -29,196 +48,219 @@ local PATCH_PARAM_MAP = {
   {390,0,3242},{391,0,3243},{392,0,3244},{393,0,3245}
 }
 
--- Build once: a fast lookup of parameter numbers that belong to the mod-amount macro system, so the generic snapshot machinery can skip them entirely.
--- Parameters that use non-linear/derived encoding and should not be captured or restored by the generic COMPARE_IT snapshot machinery.
--- 16003 = combined master clock byte (sysEx byte 237 + bit from 238), already handled independently via events.onPotTouchChange() /
+-- Parameters not captured/restored by the generic snapshot machinery.
+-- 16003 = combined master clock byte (sysEx byte 237 + bit from 238), handled independently via events.onPotTouchChange() /
 -- sysExPatch writes, and its valid range does not match the raw computed value in all cases.
+-- Mod amounts (PARAM_MOD_AMOUNT_INDEX) belong to the macro system and are handled in the hooks below.
 local PATCH_PARAM_SKIP_SNAPSHOT = {[16003] = true, }
-
-local PATCH_PARAM_IS_MOD_AMOUNT = {}
-for i = 1, #PATCH_PARAM_MAP do
-  local parNum = PATCH_PARAM_MAP[i][3]
-  if PARAM_MOD_AMOUNT_INDEX[parNum] or PATCH_PARAM_SKIP_SNAPSHOT[parNum] then
-    PATCH_PARAM_IS_MOD_AMOUNT[i] = true
-  end
-end
-
-local snapshotA = nil   -- table indexed same as PATCH_PARAM_MAP: value at time patch was parsed
-local snapshotB = nil   -- table indexed same as PATCH_PARAM_MAP: live/edited values, captured on toggle
-local comparingActive = false
-local snapshotBModAmounts = nil
-
-local function computeValueFromBytes(entry, bytes)
-  local sysExByte = entry[1]
-  local parKind   = entry[2]
-  local value     = bytes[sysExByte]
-  if parKind == 12 then
-    value = 64 * (bytes[sysExByte] * 2 + getBits(bytes[sysExByte + 1], 2, 1))
-  elseif sysExByte == 237 then
-    value = (bytes[sysExByte] * 2 + getBits(bytes[sysExByte + 1], 2, 1))
-  end
-  return value
-end
-
--- Called at the end of assignParam(), once sysExPatch has been fully parsed.
-local function captureSnapshotA()
-  local snap = {}
-  for i = 1, #PATCH_PARAM_MAP do
-    if not PATCH_PARAM_IS_MOD_AMOUNT[i] then
-      snap[i] = computeValueFromBytes(PATCH_PARAM_MAP[i], sysExPatch)
-    end
-  end
-  snapshotA = snap
-  snapshotB = nil
-  snapshotBModAmounts = nil
-  -- Mod amounts are captured separately from the parsed parameter state, as the unscaled base reference for A.
-  for i = 1, 16 do
-    modAmountBase[i] = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i]) or 64
-  end
-  macroBaseSnapshotA = copyModAmountBase(modAmountBase)
-  macroBaseSnapshotB = nil
-  comparingActive = false
-end
-
-local function applySnapshot(snap)
-  if not snap then return end
-  for i = 1, #PATCH_PARAM_MAP do
-    if not PATCH_PARAM_IS_MOD_AMOUNT[i] and snap[i] ~= nil then
-      local parType = PATCH_PARAM_MAP[i][2] % 10
-      local parNum  = PATCH_PARAM_MAP[i][3]
-      local value   = snap[i]
-      local ok, err = pcall( parameterMap.set, deviceId, parType, parNum, value )
-      if not ok then
-        print(string.format(
-          "applySnapshot: parNum=%d parType=%d value=%s rejected (%s)",
-          parNum, parType, tostring(value), tostring(err)
-        ))
-      end
-    end
-  end
-end
-
-local function captureLiveAsB()
-  local snap = {}
-  for i = 1, #PATCH_PARAM_MAP do
-    if not PATCH_PARAM_IS_MOD_AMOUNT[i] then
-      local parType = PATCH_PARAM_MAP[i][2] % 10
-      local parNum  = PATCH_PARAM_MAP[i][3]
-      local v = parameterMap.get(deviceId, parType, parNum)
-      if v ~= MIDI_VALUE_DO_NOT_SEND then
-        snap[i] = v
-      end
-    end
-  end
-  return snap
-end
 
 local function captureLiveModAmounts()
   local amounts = {}
   for i = 1, 16 do
-    amounts[i] = parameterMap.get( deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i] ) or 64
+    amounts[i] = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i]) or 64
   end
   return amounts
 end
 
-function compareIt(valueObject, value)
-  if not snapshotA then
-    print("COMPARE_IT: no patch parsed yet")
-    return
-  end
-  compareApplying = true
-  if value == 1 then
-    -- Remember whether LFO was running so we can resume on compare OFF.
-    lfoWasRunningBeforeCompare = lfo.isRunning
-    if lfo.isRunning then
-      stopLfo()
+local snapshotBModAmounts = nil
+
+local COMPARE_PROFILE = {
+  -- Virtual parameter number of the COMPARE_IT toggle (cleared by CompareIt.reset())
+  compareParam = PARAM_COMPARE_IT,
+
+  -- Parameter list: { parameterType, parameterNumber [, extra fields] }. Use `params = {...}` for a plain list.
+  params = nil,
+
+  -- OPTIONAL: build the list programmatically. Overrides `params` when present.
+  buildParams = function()
+    local list = {}
+    for i = 1, #PATCH_PARAM_MAP do
+      local e = PATCH_PARAM_MAP[i]
+      list[#list + 1] = { e[2] % 10, e[3], byte = e[1], kind = e[2] }
     end
-    snapshotB = captureLiveAsB()
+    return list
+  end,
+
+  -- OPTIONAL: return true to leave a parameter out of capture/restore
+  skip = function(entry)
+    return PARAM_MOD_AMOUNT_INDEX[entry[2]] or PATCH_PARAM_SKIP_SNAPSHOT[entry[2]] or false
+  end,
+
+  -- OPTIONAL: decoder for A. nil = A is the live parameterMap at captureA() time.
+  readA = function(entry)
+    local b = entry.byte
+    if entry.kind == 12 then -- CC14 composed from 2 adjacent bytes
+      return 64 * (sysExPatch[b] * 2 + getBits(sysExPatch[b + 1], 2, 1))
+    elseif b == 237 then -- clock message is also a 14bit value
+      return sysExPatch[b] * 2 + getBits(sysExPatch[b + 1], 2, 1)
+    end
+    return sysExPatch[b]
+  end,
+
+  -- OPTIONAL hooks (any may be nil)
+  onCaptureA = function() -- after a new A baseline is taken
+    snapshotBModAmounts = nil
+    for i = 1, 16 do
+      modAmountBase[i] = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i]) or 64
+    end
+    macroBaseSnapshotA = copyModAmountBase(modAmountBase)
+    macroBaseSnapshotB = nil
+  end,
+  onCompareOn = function() -- before B is captured
+    lfoWasRunningBeforeCompare = lfo.isRunning
+    if lfo.isRunning then stopLfo() end
+  end,
+  onCaptureB = function() -- after live state is captured as B
     snapshotBModAmounts = captureLiveModAmounts()
     macroBaseSnapshotB = copyModAmountBase(modAmountBase)
-    comparingActive = true
-    applySnapshot(snapshotA)
+  end,
+  afterShowA = function() -- after A has been pushed
     modAmountBase = copyModAmountBase(macroBaseSnapshotA)
     -- Show the true parsed patch values, ignoring locks.
     applyMacroToAll(1, true)
-    print("COMPARE_IT: showing A (true patch values)")
-  else
-    if snapshotB then
-      applySnapshot(snapshotB)
-      modAmountBase = copyModAmountBase(macroBaseSnapshotB)
-      -- Restore live values for locked mod amounts.
-      if snapshotBModAmounts then
-        for i = 1, 16 do
-          local lockValue = parameterMap.get( deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i] ) or 0
-          if lockValue ~= 0 then
-            parameterMap.set( deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i], snapshotBModAmounts[i] )
-          end
+  end,
+  afterRestoreB = function() -- after B has been pushed back
+    modAmountBase = copyModAmountBase(macroBaseSnapshotB)
+    -- Restore live values for locked mod amounts.
+    if snapshotBModAmounts then
+      for i = 1, 16 do
+        local lockValue = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_LOCK[i]) or 0
+        if lockValue ~= 0 then
+          parameterMap.set(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i], snapshotBModAmounts[i])
         end
       end
-      -- The stored Parameter Map has now been restored to B.
-      -- Discard any baseline captured for the old state.
-      clearLfoMapBaseline()
-      -- Apply the current macro to unlocked slots only.
-      applyMacroToAll()
-      print("COMPARE_IT: restored B (live, current macro applied)")
     end
-    comparingActive = false
+    -- The Parameter Map was restored to B: discard any baseline captured for the old state.
+    clearLfoMapBaseline()
+    -- Apply the current macro to unlocked slots only.
+    applyMacroToAll()
+  end,
+  onCompareOff = function() -- always called when compare is switched off
     -- Resume LFO only if compare ON paused it.
     if lfoWasRunningBeforeCompare then
       captureLfoMapBaseline()
       resumeLfo()
       lfoWasRunningBeforeCompare = false
     end
+  end,
+}
 
-    -- assigns sysEx MIDI values from received patch to corresponding preset parameter values via PATCH_PARAM_MAP: {byte #, parameter type, parameter #}
-function assignParam()   
-  if not sysExPatch[2] then return end -- do not process if not parsed
-  parameterMap.transaction(function()
-    for i = 1, #PATCH_PARAM_MAP do
-      local sysExByte = PATCH_PARAM_MAP[i][1]
-      local parType = PATCH_PARAM_MAP[i][2] % 10
-      local parNum = PATCH_PARAM_MAP[i][3]
-      local value = sysExPatch[sysExByte]
-      if PATCH_PARAM_MAP[i][2] == 12 then -- a CC14 parameter whose value is composed of bits from 2 adjacent bytes
-        value = 64 * ( sysExPatch[sysExByte] * 2 + getBits(sysExPatch[sysExByte + 1], 2, 1) )
-      elseif sysExByte == 237 then -- clock message is also a 14bit parameter value
-        value = ( sysExPatch[sysExByte] * 2 + getBits(sysExPatch[sysExByte + 1], 2, 1) )
+------------------------------------------------------------
+-- SECTION 2: ENGINE (do not edit)
+------------------------------------------------------------
+local CompareIt = (function(CONFIG)
+  local M = {}
+  local entries = nil
+  local snapA, snapB = nil, nil
+  local comparing = false
+
+  local function resolveEntries()
+    if entries then return entries end
+    local src = CONFIG.buildParams and CONFIG.buildParams() or CONFIG.params or {}
+    entries = {}
+    for i = 1, #src do
+      if not (CONFIG.skip and CONFIG.skip(src[i], i)) then
+        entries[#entries + 1] = src[i]
       end
-      parameterMap.updateValue(deviceId, parType, parNum, value)
     end
-    -- Establish the unscaled macro bases from the newly parsed patch.
-    for i = 1, 16 do
-      modAmountBase[i] = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i]) or 64
-    end
-    -- A newly parsed patch starts at full macro scale.
-    macroKnobValue = MAX_KNOB
-    parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_KNOB, MAX_KNOB)
-  end)
-  -- The patch parser changed the stored modulation amount values.
-  -- Any previous temporary LFO baseline is invalid.
-  clearLfoMapBaseline()
-  -- reset all virtual (E1 only) macro knob and compare params to default when a new patch is loaded  
-  resetVirtualParams()
-  syncXYFromParams()
-  -- Re-evaluate all modulation slots after the complete patch has been parsed.
-  -- A slot is dimmed only when both source parameters are zero.
-  modGroup:updateAll()
-  modFxGroup:updateAll()
-  -- Establish new A/B baseline for this patch.
-  captureSnapshotA()
-  -- Update info bar with patch name (bytes 2–17 of sysExPatch)
-  local patchName = ""
-  for j = 0, 15 do
-    local ch = sysExPatch[2 + j]
-    if ch and ch ~= 0 then patchName = patchName .. string.char(ch) end
+    return entries
   end
-  if #patchName > 0 then info.setText(string.sub(patchName, 1, 20)) end
+
+  local function apply(snap)
+    if not snap then return end
+    local list = resolveEntries()
+    for i = 1, #list do
+      if snap[i] ~= nil then
+        local ok, err = pcall(parameterMap.set, deviceId, list[i][1], list[i][2], snap[i])
+        if not ok then
+          print(string.format("CompareIt: type=%d num=%d value=%s rejected (%s)",
+            list[i][1], list[i][2], tostring(snap[i]), tostring(err)))
+        end
+      end
+    end
+  end
+
+  local function captureLive()
+    local list, snap = resolveEntries(), {}
+    for i = 1, #list do
+      local v = parameterMap.get(deviceId, list[i][1], list[i][2])
+      if v ~= nil and v ~= MIDI_VALUE_DO_NOT_SEND then snap[i] = v end
+    end
+    return snap
+  end
+
+  -- Call once a patch has been loaded (and parsed, if readA decodes from SysEx).
+  function M.captureA()
+    local list, snap = resolveEntries(), {}
+    for i = 1, #list do
+      if CONFIG.readA then
+        snap[i] = CONFIG.readA(list[i], i)
+      else
+        local v = parameterMap.get(deviceId, list[i][1], list[i][2])
+        if v ~= nil and v ~= MIDI_VALUE_DO_NOT_SEND then snap[i] = v end
+      end
+    end
+    snapA, snapB, comparing = snap, nil, false
+    if CONFIG.onCaptureA then CONFIG.onCaptureA() end
+  end
+
+  local function setOn()
+    if CONFIG.onCompareOn then CONFIG.onCompareOn() end
+    snapB = captureLive()
+    if CONFIG.onCaptureB then CONFIG.onCaptureB() end
+    comparing = true
+    apply(snapA)
+    if CONFIG.afterShowA then CONFIG.afterShowA() end
+    print("COMPARE_IT: showing A (true patch values)")
+  end
+
+  local function setOff()
+    if snapB then
+      apply(snapB)
+      if CONFIG.afterRestoreB then CONFIG.afterRestoreB() end
+      print("COMPARE_IT: restored B (live values)")
+    end
+    comparing = false
+    if CONFIG.onCompareOff then CONFIG.onCompareOff() end
+  end
+
+  function M.toggle(value)
+    if not snapA then
+      print("COMPARE_IT: no patch parsed yet")
+      return
+    end
+    compareApplying = true
+    local ok, err = pcall(function()
+      if value == 1 then setOn() else setOff() end
+    end)
+    compareApplying = false -- always cleared, even on error
+    if not ok then print("COMPARE_IT error: " .. tostring(err)) end
+  end
+
+  function M.isComparing() return comparing end
+
+  -- Leave compare mode (call when a new patch is loaded, before captureA()).
+  function M.reset()
+    comparing = false
+    if CONFIG.compareParam then
+      parameterMap.updateValue(deviceId, PT_VIRTUAL, CONFIG.compareParam, 0)
+    end
+  end
+
+  return M
+end)(COMPARE_PROFILE)
+
+------------------------------------------------------------
+-- SECTION 3: HOST WIRING
+------------------------------------------------------------
+-- COMPARE_IT virtual control callback
+function compareIt(valueObject, value)
+  CompareIt.toggle(value)
 end
 
-  end
-  compareApplying = false
-end
-
+-- After a patch is parsed (Peak: at the end of assignParam(), replacing captureSnapshotA()):
+--   CompareIt.captureA()
+-- (resetVirtualParams() already clears the compare toggle on the Peak; otherwise call CompareIt.reset() first.)
 ----------------------------- midi receive processing functions ----------------------------------------
 function midi.onSysex(midiInput, sysexBlock)
   local function isPeak()
