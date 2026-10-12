@@ -169,6 +169,98 @@ function compareIt(valueObject, value)
       resumeLfo()
       lfoWasRunningBeforeCompare = false
     end
+
+    -- assigns sysEx MIDI values from received patch to corresponding preset parameter values via PATCH_PARAM_MAP: {byte #, parameter type, parameter #}
+function assignParam()   
+  if not sysExPatch[2] then return end -- do not process if not parsed
+  parameterMap.transaction(function()
+    for i = 1, #PATCH_PARAM_MAP do
+      local sysExByte = PATCH_PARAM_MAP[i][1]
+      local parType = PATCH_PARAM_MAP[i][2] % 10
+      local parNum = PATCH_PARAM_MAP[i][3]
+      local value = sysExPatch[sysExByte]
+      if PATCH_PARAM_MAP[i][2] == 12 then -- a CC14 parameter whose value is composed of bits from 2 adjacent bytes
+        value = 64 * ( sysExPatch[sysExByte] * 2 + getBits(sysExPatch[sysExByte + 1], 2, 1) )
+      elseif sysExByte == 237 then -- clock message is also a 14bit parameter value
+        value = ( sysExPatch[sysExByte] * 2 + getBits(sysExPatch[sysExByte + 1], 2, 1) )
+      end
+      parameterMap.updateValue(deviceId, parType, parNum, value)
+    end
+    -- Establish the unscaled macro bases from the newly parsed patch.
+    for i = 1, 16 do
+      modAmountBase[i] = parameterMap.get(deviceId, PT_VIRTUAL, PARAM_MOD_AMOUNT[i]) or 64
+    end
+    -- A newly parsed patch starts at full macro scale.
+    macroKnobValue = MAX_KNOB
+    parameterMap.updateValue(deviceId, PT_VIRTUAL, PARAM_KNOB, MAX_KNOB)
+  end)
+  -- The patch parser changed the stored modulation amount values.
+  -- Any previous temporary LFO baseline is invalid.
+  clearLfoMapBaseline()
+  -- reset all virtual (E1 only) macro knob and compare params to default when a new patch is loaded  
+  resetVirtualParams()
+  syncXYFromParams()
+  -- Re-evaluate all modulation slots after the complete patch has been parsed.
+  -- A slot is dimmed only when both source parameters are zero.
+  modGroup:updateAll()
+  modFxGroup:updateAll()
+  -- Establish new A/B baseline for this patch.
+  captureSnapshotA()
+  -- Update info bar with patch name (bytes 2–17 of sysExPatch)
+  local patchName = ""
+  for j = 0, 15 do
+    local ch = sysExPatch[2 + j]
+    if ch and ch ~= 0 then patchName = patchName .. string.char(ch) end
+  end
+  if #patchName > 0 then info.setText(string.sub(patchName, 1, 20)) end
+end
+
   end
   compareApplying = false
+end
+
+----------------------------- midi receive processing functions ----------------------------------------
+function midi.onSysex(midiInput, sysexBlock)
+  local function isPeak()
+    return sysexBlock:peek(1) == 0xF0 and sysexBlock:peek(2) == 0x00
+       and sysexBlock:peek(3) == 0x20 and sysexBlock:peek(4) == 0x29
+       and sysexBlock:peek(5) == 0x01 and sysexBlock:peek(6) == 0x10
+       and sysexBlock:peek(7) == 0x00 and sysexBlock:peek(8) == 0x7E
+  end
+  if not isPeak() then return end
+  local cmd = sysexBlock:peek(9)
+  local len = sysexBlock:getLength()
+
+  -- a stored patch received and the patch name retrieved and stored in data.json
+  if PatchNames.handleSysex(sysexBlock) then return end
+
+  -- patch from edit buffer received (no bank or patch number)
+  if len == 527 and cmd == 0x00 then 
+    print("patch from edit buffer received")
+    for i = 1,512 do
+      sysExPatch[i]=sysexBlock:peek(i+15)
+    end
+    assignParam()
+  end
+
+  -- settings received
+  if len == 527 and cmd == 0x04 then 
+    print("settings received")
+    for i = 1,511 do
+      sysExSettings[i]=sysexBlock:peek(i+15)
+    end
+    assignSettings()
+    midiChannel = parameterMap.get(deviceId, PT_VIRTUAL, 8207) + 1
+    print("Peak's MIDI Channel: "..math.floor(midiChannel))
+    assignChannel(nil,1)         -- should set device channel to same as Peak's when preset loaded
+  end
+  -- user wavetable name received 
+  if len == 23 and cmd == 0x07 then
+    local slot = sysexBlock:peek(15)
+    local waveName = ""
+    for i = 1, 7 do 
+      waveName = waveName .. string.char(sysexBlock:peek(i+15))
+    end
+    waveTableNames[slot] = waveName
+  end
 end
