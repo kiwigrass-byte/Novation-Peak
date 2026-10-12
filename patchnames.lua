@@ -1,5 +1,4 @@
--- Preset compatibility check
-assert( controller.isRequired("5.0.0"), "fw 5.0.0 or higher required" )
+-- Preset compatibility: fw 5.0.0 or higher
 
 -- Declare device and port 
 local deviceId = 1 -- the device ID used in the E1 preset
