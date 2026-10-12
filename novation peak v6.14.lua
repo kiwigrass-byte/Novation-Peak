@@ -1827,7 +1827,7 @@ function assignSettings()
   end)
 end
 
--- ====================== PatchNames Parsing and Storage ================================
+-- ====================== Patch Name Parsing and Recall ==========================
 
 ------------------------------------------------------------
 -- SECTION 1: DEVICE PROFILE  
