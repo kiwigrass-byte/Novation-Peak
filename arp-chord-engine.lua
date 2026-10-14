@@ -8,7 +8,10 @@
 --             9 Latch, 10 Octaves, 11 Gate Length, 12 Swing, 13 Sync Rate, 16 Chance,
 --             18 Transpose Octave, 19 Transpose Semitone, 29 Arp On/Off, 32 Arp Reset,
 --             33 Key, 34 Scale, 27 Mode, 36 Shape, 37 Chord Mode, 40 Inversion
---             (Shape mode only - see applyInversion() below).
+--             (Shape mode only - see applyInversion() below), 53 HOLD (see onHoldChange
+--             below - keeps a directly-sounding Shape/SATB or Chord Capture chord ringing
+--             after the key is released; mutually exclusive with the arp).
+--             60/61 Min/Max Note (Config page, keyboard split).
 --
 -- Harmony Mode (ref 37, labelled "HARMONY MODE" on the controller - still
 -- "Chord Mode"/CHORD_MODE_* in this script, unrenamed internally) is Off,
@@ -465,6 +468,17 @@ local function latchMode()
   return cfgList(9)
 end
 
+-- HOLD (ref 53, Chord Generator) - while on, a chord already sounding
+-- directly (Shape/SATB with the arp off, or Chord Capture) keeps ringing
+-- once the key that struck it is released, instead of stopping. It is
+-- read live, like every other config value here. Hold and the arp cannot
+-- run together - a struck key's release has nothing to do with the arp,
+-- so the two compete for the same keystroke the same way Break Time and
+-- the arp already do (see onBreakTimeChange/onArpToggle below).
+local function holdActive()
+  return controls.get(53):getValue():getValue() == 1
+end
+
 local function chordMode()
   return cfgList(37)
 end
@@ -797,6 +811,20 @@ local function srcMatches(midiInput, channel)
   return midiInput.interface == cfgList(3) and midiInput.port == cfgList(4) and channel == cfgList(5)
 end
 
+-- MIN NOTE / MAX NOTE (refs 60/61, Config page): restrict which incoming
+-- notes the arp and Chord Capture ever see, for a keyboard split. Read
+-- live, like every other config value here. If the player sets Min above
+-- Max the two are swapped rather than treating it as an always-false
+-- range.
+local function noteInRange(note)
+  local minNote = cfgList(60)
+  local maxNote = cfgList(61)
+  if minNote > maxNote then
+    minNote, maxNote = maxNote, minNote
+  end
+  return note >= minNote and note <= maxNote
+end
+
 local function destRoute()
   return cfgList(6), cfgList(7), cfgList(8)
 end
@@ -1025,6 +1053,12 @@ local function onShapeKeyUp(note)
 
   if note ~= shapeActiveKey then return end   -- some other held key already has priority; nothing changes
 
+  -- HOLD on: leave the chord sounding and shapeActiveKey as it stands,
+  -- exactly as if the key were still down - a key that then wins priority
+  -- still takes over normally on its OWN press (onShapeKeyDown), and
+  -- turning HOLD off with nothing held stops it (see onHoldChange).
+  if holdActive() then return end
+
   -- Latch Off: a release really releases, same as ever.
   -- Latch Normal/Chord: its generated notes keep sounding, unchanged -
   -- only the "who is active" bookkeeping moves on, so a still-held key
@@ -1225,6 +1259,12 @@ local function onChordKeyUp(note)
   -- still counts towards the chord once Capture goes off.
 
   if note ~= chordActiveNote then return end   -- some other held key still has priority; nothing changes
+
+  -- HOLD on: leave the chord sounding and chordActiveNote as it stands,
+  -- exactly as if the key were still down - a later key press still
+  -- retriggers normally (its winner differs from chordActiveNote), and
+  -- turning HOLD off with nothing held stops it (see onHoldChange).
+  if holdActive() then return end
 
   stopAllChordNotes()
   local winner = activeChordNote()
@@ -1509,23 +1549,24 @@ local function advanceStep(isOffBeat)
   end
 end
 
--- An external momentary/latching MIDI switch can drive Arp On/Off and
--- Chord Capture directly, on its own CC numbers and its own routing - refs
--- 45/46/47 (Switch Interface/Port/Channel, Config page) - separate from
--- the arp's own source routing (3/4/5), since a footswitch is commonly on
--- a different port (USB Host, say) from the keyboard/synth sending notes,
--- and the two should be free to differ. CC 127 toggles Arp On/Off
--- (ref 29); CC 126 toggles Chord Capture (ref 26) - both standard on/off
--- switch CCs, 0 = off, 127 = on (>=64 counts as on, so a switch that is
--- not perfectly 0/127 still works). setValue() (not updateValue()) is used
--- deliberately: it runs the control's own function
--- (onArpToggle/onChordCapture) exactly as pressing the pad by hand would,
--- so every existing on/off side effect (silencing notes, starting/
--- stopping the timer, opening/closing the capture window) happens the
--- same way regardless of what triggered it. CC 126 is Arp On/Off, CC 127
--- is Chord Capture.
+-- An external momentary/latching MIDI switch can drive Arp On/Off, Chord
+-- Capture and HOLD directly, on its own CC numbers and its own routing -
+-- refs 45/46/47 (Switch Interface/Port/Channel, Config page) - separate
+-- from the arp's own source routing (3/4/5), since a footswitch is
+-- commonly on a different port (USB Host, say) from the keyboard/synth
+-- sending notes, and the two should be free to differ. CC 126 toggles Arp
+-- On/Off (ref 29); CC 127 toggles Chord Capture (ref 26); CC 125 toggles
+-- HOLD (ref 53) - all standard on/off switch CCs, 0 = off, 127 = on
+-- (>=64 counts as on, so a switch that is not perfectly 0/127 still
+-- works). setValue() (not updateValue()) is used deliberately: it runs
+-- the control's own function (onArpToggle/onChordCapture/onHoldChange)
+-- exactly as pressing the pad by hand would, so every existing on/off
+-- side effect (silencing notes, starting/stopping the timer, opening/
+-- closing the capture window) happens the same way regardless of what
+-- triggered it.
 local EXTERNAL_ARP_CC = 126
 local EXTERNAL_CAPTURE_CC = 127
+local EXTERNAL_HOLD_CC = 125
 
 local function switchRoute()
   return cfgList(45), cfgList(46), cfgList(47)
@@ -1537,6 +1578,15 @@ end
 -- arp's own routing. The function exists only because every control here
 -- is declared with one (recipe 33.14).
 function onSwitchRouteChange(valueObject, value)
+end
+
+-- MIN NOTE / MAX NOTE: nothing needs to react live either - noteInRange()
+-- above reads both fresh on every incoming note. The functions exist only
+-- because every control here is declared with one.
+function onMinNoteChange(valueObject, value)
+end
+
+function onMaxNoteChange(valueObject, value)
 end
 
 -- SATB (refs 50/51/52) - ROOT DEGREE, CANTUS PRIMUS, POSITION. Each
@@ -1563,11 +1613,14 @@ function midi.onControlChange(midiInput, channel, controllerNumber, value)
     controls.get(29):getValue():setValue(value >= 64 and 1 or 0)
   elseif controllerNumber == EXTERNAL_CAPTURE_CC then
     controls.get(26):getValue():setValue(value >= 64 and 1 or 0)
+  elseif controllerNumber == EXTERNAL_HOLD_CC then
+    controls.get(53):getValue():setValue(value >= 64 and 1 or 0)
   end
 end
 
 function midi.onNoteOn(midiInput, channel, noteNumber, velocity)
   if not srcMatches(midiInput, channel) then return end
+  if not noteInRange(noteNumber) then return end
 
   if velocity == 0 then
     onKeyUp(noteNumber)
@@ -1580,6 +1633,7 @@ end
 
 function midi.onNoteOff(midiInput, channel, noteNumber, velocity)
   if not srcMatches(midiInput, channel) then return end
+  if not noteInRange(noteNumber) then return end
   onKeyUp(noteNumber)
   onChordKeyUp(noteNumber)
 end
@@ -1994,6 +2048,36 @@ function onArpReset(valueObject, value)
   shuffledOrder, shuffledPos = nil, 1
 end
 
+-- HOLD (ref 53): keeps a directly-sounding chord (Shape/SATB or Chord
+-- Capture) ringing after the key that struck it is released, until HOLD
+-- itself is turned off. It cannot run together with the arp - a struck
+-- key's release has nothing to do with the arp - so the two compete for
+-- the same keystroke exactly the way Break Time and the arp already do
+-- (onBreakTimeChange/onArpToggle): turning HOLD on hands the keystroke
+-- back from the arp, turning the arp on takes it back from HOLD.
+function onHoldChange(valueObject, value)
+  if value == 1 then
+    if isArpOn() then
+      controls.get(29):getValue():setValue(0)   -- Arp: off, HOLD has the keystroke now
+    end
+    return
+  end
+
+  -- HOLD turned off: anything only still sounding because of it, with
+  -- nothing physically holding it any more, should stop now.
+  local mode = chordMode()
+  if mode == CHORD_MODE_SHAPE or mode == CHORD_MODE_SATB then
+    if shapeActiveKey ~= nil and shapeHeld[shapeActiveKey] == nil then
+      removeGeneratedNotes(shapeActiveKey)
+      shapeActiveKey = nil
+    end
+  elseif mode == CHORD_MODE_OFF then
+    if chordActiveNote ~= nil and chordHeld[chordActiveNote] == nil then
+      stopAllChordNotes()
+    end
+  end
+end
+
 function onArpToggle(valueObject, value)
   if value == 1 then
     -- The arp and Break Time compete for the same keystroke (see
@@ -2001,6 +2085,10 @@ function onArpToggle(valueObject, value)
     -- back to it, so Break Time is reset to 0.
     if cfgValue(43) > 0 then
       controls.get(43):getValue():setValue(0)   -- Break Time: off, the arp has the keystroke now
+    end
+    -- HOLD competes for the same keystroke too (see onHoldChange above).
+    if holdActive() then
+      controls.get(53):getValue():setValue(0)   -- HOLD: off, the arp has the keystroke now
     end
     -- Handing the held pool over to the arp: anything Shape/SATB was
     -- sounding directly (arp was off a moment ago) must stop now, since the
