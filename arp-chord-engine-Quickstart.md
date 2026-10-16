@@ -116,23 +116,33 @@ Used where one held key must “win”:
 - **Lowest**
 
 Affects:
-- Chord Capture playback key selection
 - Shape/SATB active-key selection when multiple keys are held
+- Which key drives direct generated output in Shape/SATB modes
 
 ---
 
-## 10) External switch control (optional)
+## 10) HOLD / RELEASE / FADE
+
+- **HOLD** (53) keeps directly sounding Shape/SATB chords ringing after key release when the arp is off.
+- **RELEASE** (35) fades held direct chords out when HOLD is turned off.
+- **FADE CC** (38) selects the CC used for the fade ramp.
+
+HOLD and the arp cannot run together.
+
+---
+
+## 11) External switch control (optional)
 
 Set switch input route on refs **45/46/47**.
 
 On that route:
 - **CC126** toggles Arp On/Off (ref 29)
-- **CC127** toggles Capture (ref 26)
+- **CC125** toggles HOLD (ref 53)
 - Value >= 64 = ON
 
 ---
 
-## 11) Five ready-to-play recipes
+## 12) Five ready-to-play recipes
 
 ## A) Classic arp
 - Harmony Mode: Off
@@ -153,6 +163,7 @@ On that route:
 - Position: Open
 - Arp: Off
 - Latch: Normal or Chord
+- HOLD: On
 - Play one key at a time for 4-note stacks.
 
 ## D) Captured voicing transposer
@@ -162,19 +173,20 @@ On that route:
 - Play melody keys; each triggers captured voicing.
 
 ## E) Broken chord performer
-- Harmony Mode: Shape or SATB (or captured chord)
+- Harmony Mode: Shape or SATB
 - Arp: Off
 - Break Time: 120–300 ms
 - Break Direction: Alternating
 
 ---
 
-## 12) Quick troubleshooting
+## 13) Quick troubleshooting
 
 - **No response to keys**: check source refs 3/4/5
 - **Response but no sound**: check destination refs 6/7/8
 - **Capture seems inactive**: ensure Harmony Mode is Off
 - **Break not working**: make sure Arp is Off
+- **HOLD not doing anything**: remember it only matters for direct Shape/SATB sounding with arp off
 - **Arp not running**: check ref 29 On and tempo/sync values
 - **Stuck behavior after route changes**: retrigger notes; script clears states on route/mode changes by design
 
