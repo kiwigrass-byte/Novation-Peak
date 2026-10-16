@@ -13,7 +13,7 @@ This preset script combines three note-generation systems:
 1. **Arpeggiator**  
    Uses held notes as a pool and plays them step-by-step using selectable patterns, sync rates, gate, swing, chance, transpose, octaves, and latch modes.
 
-2. **Harmony Mode** (`ref 37`, labeled “HARMONY MODE” on controller)  
+2. **Chord Mode** (`ref 37`)  
    - **Off**: keys behave normally (one key = one note)
    - **Shape**: each key generates a diatonic chord shape from Key/Scale/Mode
    - **SATB**: each key generates a four-part harmonization with common-practice / tintinnabuli-style voicing options
