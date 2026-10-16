@@ -142,19 +142,19 @@ Before send:
 - Quantizer is active for arp step output and used as degree basis for Shape/SATB generation logic.
 
 `Mode` display:
-- For Major scale, names Ionian..Locrian are shown where applicable.
+- For scales with named modes, the names are used.
 - Otherwise numeric label shown.
 
 ---
 
-## 6) Harmony Mode (`ref 37`)
+## 6) Chord Mode (`ref 37`)
 
 Values:
 - `0` Off
 - `1` Shape
 - `2` SATB
 
-Visibility rules (`updateHarmonyParamVisibility`):
+Visibility rules (`updateChordParamVisibility`):
 - Always visible: Key/Mode/Scale (`33/27/34`)
 - Shape visible only in Shape mode: Shape/Inversion (`36/40`)
 - SATB visible only in SATB mode: Root Degree/Cantus Primus/Position (`50/51/52`)
