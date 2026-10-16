@@ -9,14 +9,22 @@
 --             18 Transpose Octave, 19 Transpose Semitone, 29 Arp On/Off, 32 Arp Reset,
 --             33 Key, 34 Scale, 27 Mode, 36 Shape, 37 Chord Mode, 40 Inversion
 --             (Shape mode only - see applyInversion() below), 53 HOLD (see onHoldChange
---             below - keeps a directly-sounding Shape/SATB or Chord Capture chord ringing
+--             below - keeps a directly-sounding Shape/SATB chord ringing
 --             after the key is released; mutually exclusive with the arp).
---             60/61 Min/Max Note (Config page, keyboard split).
+--             60/61 Min/Max Note (Config page, keyboard split). 15 RETRIGGER (Legato/
+--             Retrigger - see regenerateShapeNotes()/retriggerOnShapeChange() below).
 --
--- Harmony Mode (ref 37, labelled "HARMONY MODE" on the controller - still
--- "Chord Mode"/CHORD_MODE_* in this script, unrenamed internally) is Off,
--- Shape or SATB, and decides what a struck key turns into for the ARP
--- ITSELF - not a separate tool.
+-- Key (ref 33) is a 25-item list, C to C to C (two octaves of pitch class,
+-- -12..+12), centred on the middle C (value 0, the default) rather than the
+-- old 12-item C..B - so turning the knob down from C reaches B, A#, ... in
+-- one step each, exactly as turning it up reaches C#, D, ..., instead of
+-- needing 11 turns to go "down" to B the long way round through C#. Every
+-- reader of cfgList(33) (nearestScaleMatch's `(note - key) % 12`) is
+-- insensitive to a key value 12 apart, so C at -12, 0 and +12 are musically
+-- identical; only which one is nearest the knob's current position differs.
+--
+-- Chord Mode (ref 37) is Off, hape or SATB, and decides what a struck key 
+-- turns into for the ARP ITSELF - not a separate tool.
 --
 -- SATB (refs 50/51/52: ROOT DEGREE, CANTUS PRIMUS, POSITION) builds a
 -- common-practice four-part harmonization. ROOT DEGREE does NOT pick one
@@ -37,27 +45,17 @@
 -- sent, not just which voice label is attached to them. SATB plugs
 -- into the exact
 -- same output machinery as Shape - joins the arp's pool when the arp is
--- on, sounds directly (through Break Time if set) when it is off, shares
--- Note Priority so one held key sounds at a time, and is mutually
--- exclusive with Chord Capture the same way Shape is.
+-- on, sounds directly (through Break Time if set) when it is off, and
+-- shares Note Priority so one held key sounds at a time.
 --
 -- Key/Scale Mode/Scale are not Shape-specific - the plain arp quantizes
 -- every step through them too (see quantizeToScale() below) - so they
--- stay visible under every Harmony Mode, Off included. Only Shape's own
+-- stay visible under every Chord Mode, Off included. Only Shape's own
 -- two (Shape, Inversion) and SATB's three (Root Degree/Cantus
 -- Primus/Position) are shown/hidden by mode: Off hides both groups,
 -- Shape shows its two and hides SATB's three, SATB shows its three and
--- hides Shape's two. See updateHarmonyParamVisibility() below.
+-- hides Shape's two. See updateChordParamVisibility() below.
 --
--- Chord Capture (the CAPTURE pad, ref 26) and Shape/SATB are alternative
--- chord-to-key mappings and cannot both be live: selecting either clears
--- Chord Capture outright - exactly as pressing CLR CHORD would, including
--- a chord already armed (the indicator green from an earlier capture) and
--- a window left open, which is abandoned rather than finalized - and
--- turning Capture on while Shape or SATB is selected switches Harmony
--- Mode back to Off first, through Harmony Mode's own function. Each one
--- yields to the other exactly the way Break Time and the Arp do (see
--- onBreakTimeChange below).
 --   Off   - the arp sees exactly the notes you hold, same as always. Play
 --           a Cmaj7 yourself (C E G B) and the arp arpeggiates those four.
 --   Shape - every key you strike is expanded, the moment it goes down,
@@ -88,18 +86,6 @@
 -- SCALE_OFFSETS and quantizeToScale() below. Scale "Chromatic" (the
 -- default) allows every note, i.e. quantizes nothing.
 --             (14, 15 and 17 are group labels added in the editor - not controls this script reads.)
---
--- Chord Capture - a separate, older tool, entirely independent of the arp
--- and of Shape: its own note tracking, its own output (not arpeggiated),
--- meant for trying a hand-played chord (an awkward Cmin7 voicing, say)
--- moved around the keyboard while editing a synth patch, not for feeding
--- the arp. It shares the arp's source/destination routing (3/4/5 and
--- 6/7/8) rather than carrying its own: 26 is its Capture toggle, 30 is its
--- Clear pad, 31 is the Chord Armed indicator (display only - the script
--- drives its colour; nothing reacts to it being pressed). It only ever
--- operates while Chord Mode is Off - see the guard at the top of
--- onChordKeyDown()/onChordKeyUp() below - since a struck key's own meaning
--- is already spoken for by Shape whenever Chord Mode is Shape.
 
 local held = {}                      -- note -> velocity, the notes being arpeggiated
 local pressOrder = {}                -- notes in the order pressed ("As Played")
@@ -112,6 +98,21 @@ local currentNote = nil              -- the one note sounding on the destination
 local gateHandle = nil               -- schedule.after handle for the gate-off
 local swingParity = 0                -- 0 = on-beat step, 1 = off-beat step
 
+-- CLOCK SRC (ref 42, I/O Config page): Internal (the timer, driven by TEMPO
+-- ref 1 and SYNC ref 13 as always) or External (incoming MIDI clock on the
+-- arp's own source route - cfgList(3)/cfgList(4), interface/port only;
+-- clock has no channel). External ignores TEMPO outright - the step rate
+-- comes from counting clock pulses against SYNC's beat value instead of
+-- from basePeriodMs() - and Internal ignores incoming clock. Switching
+-- between the two stops whatever is sounding and resets the step position,
+-- the same as any other routing change here (recipe 33.13).
+local CLOCK_INTERNAL, CLOCK_EXTERNAL = 0, 1
+local CLOCK_SRC_REF = 42
+local CLOCK_IFACE_REF = 54           -- CLOCK IFACE: the clock's own route, independent of
+local CLOCK_PORT_REF = 55            -- the note source (3/4) - a footswitch/clock box is
+                                      -- commonly on a different port from the keyboard.
+local extClockCount = 0              -- MIDI clock pulses (24 PPQN) seen since the last step
+
 -- Forward declared: isArpOn() is defined near the bottom (by the Arp
 -- On/Off control's own section) but addGeneratedNotes()/removeGeneratedNotes()/
 -- regenerateShapeNotes(), much higher up, need to call it to decide whether
@@ -120,39 +121,13 @@ local swingParity = 0                -- 0 = on-beat step, 1 = off-beat step
 -- running, current behaviour unchanged).
 local isArpOn
 
--- Forward declared: finalizeCapture() is assigned down by onChordCapture
--- (which is where chordCaptureNotes is explained), but onChordModeChange,
--- above it in the file, needs to call it DIRECTLY rather than through
--- Capture's own control value - see the long comment at onChordModeChange
--- for why a nested setValue() will not do here.
-local finalizeCapture
-
--- Forward declared the same way: clearChordCapture() is assigned down by
--- onChordClear (the CLR CHORD pad), and onChordModeChange calls it
--- directly for the same reason finalizeCapture is - selecting Shape wipes
--- the stored chord exactly as CLR CHORD would, rather than leaving a
--- chord captured under Off still armed (and the indicator still green)
--- once Shape has taken over what a struck key means.
-local clearChordCapture
-
--- Chord Mode - its own note tracking, entirely separate from the arp's
--- pattern engine, but it shares the arp's own source/destination routing.
-local chordHeld = {}                 -- note -> velocity, keys currently physically down
-local chordPressOrder = {}           -- notes in the order pressed (for Last priority), most recent last
-local chordActiveNote = nil          -- the physical key currently driving the sounding chord, or nil
-local chordActiveSentNotes = {}      -- the generated note numbers currently sounding for chordActiveNote
-local chordOffsets = nil             -- captured chord: array of semitone offsets from its root, or nil
-local chordArmed = false             -- true once a chord has been captured
-local chordCapturing = false         -- true while the Capture toggle is on
-local chordCaptureNotes = {}         -- note -> velocity, every note played during this capture window
-
 -- Note priority (ref 49): which physically-held key drives the sounding
 -- chord when more than one is down at once. Last: whichever was struck
 -- most recently (the usual mono-synth behaviour); Highest/Lowest: whichever
 -- of the currently-held keys is pitched highest/lowest, regardless of
 -- press order. Whichever key "wins" sounds the chord; the others are held
 -- in reserve and take over, retriggering, if the winner is released while
--- they are still down - see activeChordNote() below.
+-- they are still down - see activeShapeNote() below.
 local CHORD_PRIORITY_LAST, CHORD_PRIORITY_HIGHEST, CHORD_PRIORITY_LOWEST = 0, 1, 2
 
 -- Pattern list, in the order the control shows them.
@@ -180,13 +155,13 @@ local shuffledPos = 1
 local LATCH_OFF, LATCH_NORMAL, LATCH_CHORD = 0, 1, 2
 local CHORD_MODE_OFF, CHORD_MODE_SHAPE, CHORD_MODE_SATB = 0, 1, 2
 
--- The controls that only make sense under one Harmony Mode or the other -
--- shown/hidden together by updateHarmonyParamVisibility() below, so the
+-- The controls that only make sense under one Chord Mode or the other -
+-- shown/hidden together by updateChordParamVisibility() below, so the
 -- grid only ever shows parameters the current mode actually reads.
 -- Key/Scale Mode/Scale are NOT Shape-specific - they are the quantizer the
 -- plain arp uses too (see the comment on quantizeToScale() above) AND the
 -- degree numbers both Shape and SATB read, so they stay visible always,
--- regardless of Harmony Mode. Only Shape and Inversion are Shape-only.
+-- regardless of Chord Mode. Only Shape and Inversion are Shape-only.
 local ALWAYS_VISIBLE_REFS = { 33, 27, 34 }       -- Key, Mode, Scale
 local SHAPE_PARAM_REFS    = { 36, 40 }           -- Shape, Inversion
 local SATB_PARAM_REFS     = { 50, 51, 52 }       -- Root Degree, Cantus Primus, Position
@@ -224,27 +199,15 @@ local SCALE_OFFSETS = {
   [1] = { 0, 2, 4, 5, 7, 9, 11 },                  -- Major
   [2] = { 0, 2, 3, 5, 7, 8, 10 },                  -- Natural Minor
   [3] = { 0, 2, 3, 5, 7, 8, 11 },                  -- Harmonic Minor
-  [4] = { 0, 2, 4, 5, 7, 9, 10 },                  -- Dominant
+  [4] = { 0, 2, 4, 5, 7, 9, 10 },                  -- Dom Mix (Mixolydian)
   [5] = { 0, 2, 3, 5, 6, 8, 9, 11 },                -- Fully Diminished
   [6] = { 0, 1, 3, 4, 6, 7, 9, 10 },                -- Dominant Dim
   [7] = { 0, 3, 4, 7, 8, 11 },                      -- Augmented
   [8] = { 0, 2, 4, 6, 8, 10 },                      -- Whole Tone
 }
 
--- The familiar mode names for the Major scale, indexed 0..6 to match the
--- Mode control's own raw value (a list: 0 Ionian .. 6 Locrian, shown to the
--- player as "1".."12"). Nothing is shown for another scale, or for a Mode
--- value beyond the scale's own note count - formatModeName() falls back to
--- the plain number (the label the control itself shows) in both cases.
-local MAJOR_MODE_NAMES = {
-  [0] = "Ionian",
-  [1] = "Dorian",
-  [2] = "Phrygian",
-  [3] = "Lydian",
-  [4] = "Mixolydian",
-  [5] = "Aeolian",
-  [6] = "Locrian",
-}
+local SCALE_CHROMATIC, SCALE_MAJOR, SCALE_NAT_MINOR, SCALE_HARM_MINOR = 0, 1, 2, 3
+local SCALE_DOMINANT, SCALE_FULL_DIM, SCALE_DOM_DIM, SCALE_AUGMENTED, SCALE_WHOLE_TONE = 4, 5, 6, 7, 8
 
 -- Rotates a scale's interval pattern to start from its mode-th degree,
 -- keeping the same root (Key) as offset 0 - this is what turns Major's
@@ -291,11 +254,12 @@ local function computeRotatedOffsets(scale, mode)
   return rotated
 end
 
--- The 14 chord shapes, in the order the Shape control lists them. Each
--- entry is a list of { degree, extraOctaves } pairs: `degree` is a 1-based
--- scale degree (1 is the root) read against whatever the current
--- Key/Scale/Mode's rotated offsets are, and `extraOctaves` is how many
--- further octaves to add on top of that degree's own octave - this is how
+-- The chord shapes, in the order the Shape control lists them. Each entry
+-- is a list of { degree, extraOctaves } pairs: `degree` is a 1-based scale
+-- degree (1 is the root) read against whatever the current Key/Scale/
+-- Mode's rotated offsets are, and `extraOctaves` is how many further
+-- octaves to add on top of that degree's own octave (negative drops it an
+-- octave instead, as Jazz Triad 1/2's own root does) - this is how
 -- "1(8ve)" and "2(8ve)" in the shape table are expressed, rather than as a
 -- literal semitone count, so every shape stays correct as Key/Scale/Mode
 -- change under it.
@@ -307,13 +271,19 @@ local SHAPES = {
   [4]  = { { 1, 0 }, { 5, 0 }, { 1, 1 } },                 -- Root/Fifth + 8ve
   [5]  = { { 1, 0 }, { 3, 0 }, { 5, 0 } },                 -- Triad
   [6]  = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 1, 1 } },        -- Triad + 8ve
-  [7]  = { { 1, 0 }, { 4, 0 }, { 5, 0 } },                 -- Sus4
-  [8]  = { { 1, 0 }, { 4, 0 }, { 5, 0 }, { 1, 1 } },        -- Sus4 + 8ve
-  [9]  = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 6, 0 } },        -- Sixth
-  [10] = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 6, 0 }, { 1, 1 } }, -- Sixth + 8ve
-  [11] = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 7, 0 } },        -- Seventh
-  [12] = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 7, 0 }, { 1, 1 } }, -- Seventh + 8ve
-  [13] = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 7, 0 }, { 2, 1 } }, -- Ninth
+  [7]  = { { 1, 0 }, { 2, 0 }, { 5, 0 } },                 -- Sus2
+  [8]  = { { 1, 0 }, { 2, 0 }, { 5, 0 }, { 1, 1 } },        -- Sus2 + 8ve
+  [9]  = { { 1, 0 }, { 4, 0 }, { 5, 0 } },                 -- Sus4
+  [10] = { { 1, 0 }, { 4, 0 }, { 5, 0 }, { 1, 1 } },        -- Sus4 + 8ve
+  [11] = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 6, 0 } },        -- Sixth
+  [12] = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 6, 0 }, { 1, 1 } }, -- Sixth + 8ve
+  [13] = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 7, 0 } },        -- Seventh
+  [14] = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 7, 0 }, { 1, 1 } }, -- Seventh + 8ve
+  [15] = { { 1, 0 }, { 3, 0 }, { 5, 0 }, { 7, 0 }, { 2, 1 } }, -- Ninth
+  [16] = { { 1, -1 }, { 3, 1 }, { 7, 0 } },                    -- Jazz Triad 1
+  [17] = { { 1, -1 }, { 3, 0 }, { 7, 0 } },                    -- Jazz Triad 2
+  [18] = { { 1, -1 }, { 3, 1 }, { 5, 0 }, { 7, 0 } },          -- Jazz Tetrad 1
+  [19] = { { 1, -1 }, { 3, 0 }, { 5, 0 }, { 7, 0 } },          -- Jazz Tetrad 2
 }
 
 -- The semitone offset, counted from a root that is already sitting AT one
@@ -360,6 +330,139 @@ end
 -- - it reads the control's own display range, which is stored correctly.
 local function cfgValue(ref)
   return controls.get(ref):getValue():getValue()
+end
+
+-- The familiar mode names for Major, Natural Minor and Harmonic Minor - the
+-- three seven-note scales that get named modes rather than plain numbers.
+-- Each table is indexed 0..6 to match the Mode control's own raw value;
+-- modeNamesForScale() below picks the right table (or none) for the
+-- current Scale, and modeChoiceCountForScale() limits the Mode control to
+-- exactly as many choices as the table has, so turning past "7" is not
+-- possible for these three scales - see onScaleChange() and
+-- preset.onReady().
+local MAJOR_MODE_NAMES = {
+  [0] = "Ionian",
+  [1] = "Dorian",
+  [2] = "Phrygian",
+  [3] = "Lydian",
+  [4] = "Mixolydian",
+  [5] = "Aeolian",
+  [6] = "Locrian",
+}
+
+local NAT_MINOR_MODE_NAMES = {
+  [0] = "Aeolian",
+  [1] = "Locrian",
+  [2] = "Ionian",
+  [3] = "Dorian",
+  [4] = "Phrygian",
+  [5] = "Lydian",
+  [6] = "Mixolydian",
+}
+
+-- Dom Mix (SCALE_DOMINANT) is the major scale's own interval pattern
+-- rotated to start on its 5th degree (Mixolydian), so rotating IT through
+-- its 7 degrees cycles through the identical 7 diatonic modes as Major -
+-- just re-anchored here so Mixolydian is mode 0: mode k of Dom Mix is
+-- mode (4 + k) mod 7 of Major.
+local DOMINANT_MODE_NAMES = {
+  [0] = "Mixolydian",
+  [1] = "Aeolian",
+  [2] = "Locrian",
+  [3] = "Ionian",
+  [4] = "Dorian",
+  [5] = "Phrygian",
+  [6] = "Lydian",
+}
+
+-- Accidentals are written in plain ASCII ("#" for sharp, "b"/"bb" for
+-- flat/double-flat, "nat" for natural) rather than the Unicode natural/
+-- sharp/flat glyphs (U+266E/266F/266D): the controller's screen font has
+-- no glyph for any of the three, so they drew as nothing at all - found
+-- on the instrument, not in the editor or the log, which both show the
+-- bytes just fine. ASCII also sidesteps the overlay label's 20-byte limit
+-- that a double-flat written as two 3-byte UTF-8 sequences blew past,
+-- silently dropping "Super-Locrian"'s trailing "7".
+local HARM_MINOR_MODE_NAMES = {
+  [0] = "Aeolian nat7",
+  [1] = "Locrian nat6",
+  [2] = "Ionian #5",
+  [3] = "Dorian #4",
+  [4] = "Phrygian Dominant",
+  [5] = "Lydian #2",
+  [6] = "Super-Locrian bb7",
+}
+
+-- The named-mode table for a scale, or nil when that scale's modes are
+-- shown as plain numbers (Chromatic, Dominant, the diminished/augmented
+-- scales, Whole Tone).
+local function modeNamesForScale(scale)
+  if scale == SCALE_MAJOR then return MAJOR_MODE_NAMES end
+  if scale == SCALE_NAT_MINOR then return NAT_MINOR_MODE_NAMES end
+  if scale == SCALE_HARM_MINOR then return HARM_MINOR_MODE_NAMES end
+  if scale == SCALE_DOMINANT then return DOMINANT_MODE_NAMES end
+  return nil
+end
+
+-- How many Mode choices make sense for a scale: the three named sets are
+-- limited to exactly their 7 modes; Whole Tone, Full Dim and Dom Dim are
+-- all symmetrical (repeating every 2-4 semitones), so rotating them by a
+-- scale degree just gives the same set of pitches back - 1 choice each;
+-- Augmented repeats every minor third (4 semitones) but, unlike those
+-- three, alternates between two distinct note sets as you rotate through
+-- it one degree at a time (the augmented triad's own two inversions) - 2
+-- choices; everything else keeps the full 12.
+local function modeChoiceCountForScale(scale)
+  if scale == SCALE_MAJOR or scale == SCALE_NAT_MINOR or scale == SCALE_HARM_MINOR
+    or scale == SCALE_DOMINANT then
+    return 7
+  end
+  if scale == SCALE_WHOLE_TONE or scale == SCALE_FULL_DIM or scale == SCALE_DOM_DIM then
+    return 1
+  end
+  if scale == SCALE_AUGMENTED then
+    return 2
+  end
+  return 12
+end
+
+-- Limiting a List's choices takes more than value:setMax() - the picker a
+-- tap opens lists every item the OVERLAY has, regardless of the value's
+-- own max, so the overlay itself has to be rebuilt to the right size.
+-- overlays.create() then re-binds every bound List value's min/max to the
+-- new item count and repaints it automatically (preset-lua reference,
+-- 14.4) - which is also why this replaces the formatter/setOverride
+-- approach a plain value:setMax() needed: the overlay's own labels are
+-- what is shown, no override required, and they are correct the moment
+-- the overlay changes.
+--
+-- The overlay id to rebuild is read from the control itself, live
+-- (value:getOverlayId()), NEVER taken from the project file's own
+-- overlayId - the compiled preset renumbers overlays on export/load, so
+-- the id a control ends up bound to on the instrument is not necessarily
+-- the id the editor declared. Hard-coding the project's number once
+-- clobbered the SHAPE control's overlay (a different control that,
+-- after renumbering, happened to end up on the id Mode's project file
+-- declared) - found by checking every control's live getOverlayId() on
+-- the instrument after the choices showed garbage.
+local function rebuildModeOverlay()
+  local scale = cfgList(34)
+  local names = modeNamesForScale(scale)
+  local count = modeChoiceCountForScale(scale)
+  local modeValue = controls.get(27):getValue()
+  local overlayId = modeValue:getOverlayId()
+
+  local items = {}
+  for i = 0, count - 1 do
+    items[i + 1] = { value = i, label = (names and names[i]) or tostring(i + 1) }
+  end
+  overlays.create(overlayId, items)
+
+  -- Defensive: pull the stored value down if it is still holding an index
+  -- the new, smaller overlay no longer has.
+  if modeValue:getValue() > (count - 1) then
+    modeValue:updateValue(count - 1)
+  end
 end
 
 -- Break Time/Direction (refs 43/44) - spreading a chord's notes out in time
@@ -469,7 +572,7 @@ local function latchMode()
 end
 
 -- HOLD (ref 53, Chord Generator) - while on, a chord already sounding
--- directly (Shape/SATB with the arp off, or Chord Capture) keeps ringing
+-- directly (Shape/SATB with the arp off) keeps ringing
 -- once the key that struck it is released, instead of stopping. It is
 -- read live, like every other config value here. Hold and the arp cannot
 -- run together - a struck key's release has nothing to do with the arp,
@@ -483,15 +586,13 @@ local function chordMode()
   return cfgList(37)
 end
 
--- Shows only the parameter group the current Harmony Mode actually reads:
+-- Shows only the parameter group the current Chord Mode actually reads:
 -- Off hides both the Shape params (Key/Mode/Scale/Shape/Inversion) and the
 -- SATB params (Root Degree/Cantus Primus/Position); Shape shows its own
 -- five and hides SATB's three; SATB shows its own three and hides Shape's
--- five. Called whenever Harmony Mode changes (onChordModeChange, and the
--- onChordCapture path that moves it to Off directly - see settleModeChange
--- and its callers) and once from preset.onReady() to match whatever
--- loaded.
-local function updateHarmonyParamVisibility()
+-- five. Called whenever Chord Mode changes (onChordModeChange) and once
+-- from preset.onReady() to match whatever loaded.
+local function updateChordParamVisibility()
   local mode = chordMode()
   local showShape = (mode == CHORD_MODE_SHAPE)
   local showSatb = (mode == CHORD_MODE_SATB)
@@ -811,8 +912,31 @@ local function srcMatches(midiInput, channel)
   return midiInput.interface == cfgList(3) and midiInput.port == cfgList(4) and channel == cfgList(5)
 end
 
+-- Clock has no channel, so a clock message is matched on interface/port
+-- only - its OWN route (CLOCK IFACE/PORT, refs 54/55), not the note
+-- source's (3/4): a footswitch or a separate clock box is commonly on a
+-- different port from the keyboard sending notes, and the two should be
+-- free to differ.
+local function srcPortMatches(midiInput)
+  return midiInput.interface == cfgList(CLOCK_IFACE_REF) and midiInput.port == cfgList(CLOCK_PORT_REF)
+end
+
+local function clockIsExternal()
+  return cfgList(CLOCK_SRC_REF) == CLOCK_EXTERNAL
+end
+
+-- How many MIDI clock pulses (24 per quarter note) make up one arp step at
+-- the current SYNC rate. syncRates[n] is already in quarter notes (see the
+-- table above, e.g. 6/24 for a 16th), so multiplying back by 24 recovers
+-- the exact integer pulse count (6, 12, 24, ...) with no rounding drift.
+local function ticksPerStepFor()
+  local beatsPerStep = syncRates[cfgList(13)] or 0.25
+  local ticks = math.floor(beatsPerStep * 24 + 0.5)
+  return (ticks > 0) and ticks or 1
+end
+
 -- MIN NOTE / MAX NOTE (refs 60/61, Config page): restrict which incoming
--- notes the arp and Chord Capture ever see, for a keyboard split. Read
+-- notes the arp ever sees, for a keyboard split. Read
 -- live, like every other config value here. If the player sets Min above
 -- Max the two are swapped rather than treating it as an always-false
 -- range.
@@ -827,6 +951,122 @@ end
 
 local function destRoute()
   return cfgList(6), cfgList(7), cfgList(8)
+end
+
+-- HOLD RELEASE (ref 35, "RELEASE") and FADE CC (ref 38, "FADE CC"): when
+-- HOLD is switched off, a directly-sounding Shape/SATB chord does not just
+-- stop dead - it is held at full volume and only the
+-- real note-off is sent once RELEASE's seconds (0..20, 0 is the old
+-- instant-cutoff behaviour, and the default) have passed.
+--
+-- MIDI velocity is fixed at note-on and cannot be changed on a note already
+-- sounding without sending another note-on - which is a retrigger, exactly
+-- what this feature exists to avoid. So an actual fade, rather than a
+-- plain delayed cutoff, can only be done with a continuous controller
+-- ramped down ahead of the note-off, and which one varies by instrument:
+-- FADE CC (0..127, default 7, Channel Volume - the one General MIDI
+-- requires every instrument to support) names it, so it can be pointed at
+-- whatever the receiving synth actually responds to - Expression (11) is
+-- the usual alternative. An instrument that honours neither still gets the
+-- delayed cutoff: the chord keeps ringing for RELEASE seconds and then
+-- stops, which on its own is a useful "hang time" even with no audible
+-- fade.
+--
+-- The fade is tracked so a note that starts sounding again before it
+-- finishes - the same key struck again, Hold switched back on, the
+-- destination changed, the preset reloaded - cancels it outright rather
+-- than letting a stale scheduled CC or note-off land on the new sound.
+local holdFadeHandles = {}   -- schedule.after handles, for cancelling mid-ramp
+local holdFadeNotes = {}     -- the notes this fade will eventually turn off
+local holdFadeRoute = nil    -- { iface, port, chan } the fade is sending on
+
+-- Cancels any fade in progress. `silence`: when true, also stops the fading
+-- notes right now and resets Expression to full - the right thing whenever
+-- something else is about to take over the same keystroke or route.
+local function cancelHoldFade(silence)
+  for _, h in ipairs(holdFadeHandles) do
+    schedule.cancel(h)
+  end
+  holdFadeHandles = {}
+
+  if silence and holdFadeRoute and #holdFadeNotes > 0 then
+    for _, n in ipairs(holdFadeNotes) do
+      midi.sendNoteOff(holdFadeRoute.iface, holdFadeRoute.port, holdFadeRoute.chan, n, 0)
+    end
+    midi.sendControlChange(holdFadeRoute.iface, holdFadeRoute.port, holdFadeRoute.chan, cfgValue(38), 127)
+  end
+
+  holdFadeNotes = {}
+  holdFadeRoute = nil
+end
+
+-- Schedules exactly ONE step ahead, not the whole ramp up front: `after`/
+-- `every` share a pool of only 32 live entries per preset (see schedule()
+-- in the reference), so a release above 1.6 s (32 steps of 50 ms) queued
+-- past the 32nd entry, schedule.after() raised, and the final step - the
+-- one that actually sends the note-off - never got scheduled at all. The
+-- chord then rang forever. Scheduling one step, which re-schedules the
+-- next when it runs, keeps the pool at exactly one entry per fade no
+-- matter how long RELEASE is set to.
+local scheduleFadeStep
+
+-- The fade's curve, kept as its own function so it can be checked directly
+-- (see the test file) without waiting out a real schedule. Squared, not
+-- linear: hearing is roughly logarithmic, so a straight ramp in CC value
+-- sounds like it hangs near full volume and then drops away quickly at the
+-- end. Squaring (1 - i/steps) front-loads the drop and tapers the tail,
+-- closer to how a real amp envelope's release actually decays and to how
+-- the ear perceives it. `i` is 0..steps; 0 is full level, `steps` is zero.
+function fadeCurveLevel(i, steps)
+  local remaining = 1 - i / steps
+  return math.floor(127 * remaining * remaining)
+end
+
+scheduleFadeStep = function(notes, iface, port, chan, i, steps)
+  local level = fadeCurveLevel(i, steps)
+  local isLast = (i == steps)
+  local cc = cfgValue(38)   -- read live: FADE CC can be changed mid-ramp
+  local handle = schedule.after(50, function()
+    midi.sendControlChange(iface, port, chan, cc, level)
+    if isLast then
+      for _, n in ipairs(notes) do
+        midi.sendNoteOff(iface, port, chan, n, 0)
+      end
+      midi.sendControlChange(iface, port, chan, cc, 127)
+      holdFadeHandles = {}
+      holdFadeNotes = {}
+      holdFadeRoute = nil
+    else
+      scheduleFadeStep(notes, iface, port, chan, i + 1, steps)
+    end
+  end)
+  holdFadeHandles = { handle }
+end
+
+-- Ramps Expression from full down to 0 over RELEASE's current value, then
+-- sends the real note-off for every note in `notes` and resets Expression
+-- to full again, ready for the next note-on. RELEASE 0 (the default) skips
+-- the ramp entirely and stops `notes` at once, exactly as before this
+-- feature existed.
+local function fadeOutAndRelease(notes, iface, port, chan)
+  cancelHoldFade(false)
+
+  if #notes == 0 then return end
+
+  local releaseMs = cfgValue(35) * 100   -- RELEASE is tenths of a second, 0..200 (0..20 s)
+  if releaseMs <= 0 then
+    for _, n in ipairs(notes) do
+      midi.sendNoteOff(iface, port, chan, n, 0)
+    end
+    return
+  end
+
+  holdFadeNotes = notes
+  holdFadeRoute = { iface = iface, port = port, chan = chan }
+
+  local stepMs = 50
+  local steps = math.max(1, math.floor(releaseMs / stepMs))
+  scheduleFadeStep(notes, iface, port, chan, 1, steps)
 end
 
 local function stopCurrent()
@@ -872,7 +1112,7 @@ end
 -- shared pitch outlives the first key that is released).
 -- Whether a Shape- or SATB-mode key should sound its generated notes
 -- ITSELF, right now, rather than only joining the arp's held-notes pool:
--- true whenever Harmony Mode is Shape or SATB and the arp is not running
+-- true whenever Chord Mode is Shape or SATB and the arp is not running
 -- to arpeggiate the pool for us. With the arp running this stays false and
 -- behaviour is exactly as before - the generated notes just join `held`
 -- and the arp steps them.
@@ -882,6 +1122,7 @@ local function shouldSoundShapeDirectly()
 end
 
 local function addGeneratedNotes(note, velocity)
+  cancelHoldFade(true)   -- a fresh key takes the keystroke back from any fade in progress
   local notes = notesForKey(note)
   local direct = shouldSoundShapeDirectly()
   local iface, port, chan
@@ -944,6 +1185,23 @@ end
 -- generated notes (still physically down, or latched) up to the new
 -- Shape/Inversion - recomputing each one's notes and diffing against what
 -- it previously added, rather than silencing everything outright.
+-- RETRIGGER (ref 62, "RETRIGGER" on the controller): decides what happens to
+-- a note the OLD shape and the NEW shape both contain, when Shape/Inversion
+-- (or SATB's Root Degree/Cantus Primus/Position) changes while a key is
+-- still held. Legato (0, the default): a note present in both shapes is left
+-- ringing untouched - only the notes that left get a note-off and only the
+-- notes that arrived get a note-on, so a shared tone (e.g. root/3rd/5th
+-- common to "7th" and "7th + 8ve") never clicks or retriggers. Retrigger
+-- (1): every note of the OLD shape gets a note-off and every note of the
+-- NEW shape gets a note-on, even one a moment's reflection says is "the
+-- same" pitch - so switching shapes always re-strikes the whole new chord.
+-- Read live, like every other config value here.
+local RETRIGGER_LEGATO, RETRIGGER_ON = 0, 1
+
+local function retriggerOnShapeChange()
+  return cfgList(15) == RETRIGGER_ON
+end
+
 local function regenerateShapeNotes()
   local mode = chordMode()
   if mode ~= CHORD_MODE_SHAPE and mode ~= CHORD_MODE_SATB then return end
@@ -952,6 +1210,8 @@ local function regenerateShapeNotes()
   local iface, port, chan
   if direct then iface, port, chan = destRoute() end
 
+  local retrigger = retriggerOnShapeChange()
+
   for key, oldNotes in pairs(keyGeneratedNotes) do
     local newNotes = notesForKey(key)
 
@@ -959,8 +1219,11 @@ local function regenerateShapeNotes()
     for _, n in ipairs(oldNotes) do oldSet[n] = true end
     for _, n in ipairs(newNotes) do newSet[n] = true end
 
+    -- Legato: skip a note the new shape still has - it just keeps ringing.
+    -- Retrigger: never skip - a shared note is turned off here and turned
+    -- back on below, same as any other note.
     for _, n in ipairs(oldNotes) do
-      if not newSet[n] then
+      if retrigger or not newSet[n] then
         local count = (noteRefCount[n] or 1) - 1
         if count <= 0 then
           noteRefCount[n] = nil
@@ -976,7 +1239,7 @@ local function regenerateShapeNotes()
 
     local velocity = keyVelocity[key] or 100
     for _, n in ipairs(newNotes) do
-      if not oldSet[n] then
+      if retrigger or not oldSet[n] then
         local alreadySounding = noteRefCount[n] ~= nil
         noteRefCount[n] = (noteRefCount[n] or 0) + 1
         pressNote(n, velocity)
@@ -990,19 +1253,18 @@ local function regenerateShapeNotes()
   end
 end
 
--- Shape and SATB both share Note Priority (ref 49) with Chord Capture: at
--- most ONE physically-held key contributes its generated chord to the
--- pool at a time - the "active" key, chosen the same way activeChordNote()
--- chooses for Chord Capture (Last/Highest/Lowest) - rather than every held
+-- Shape and SATB share Note Priority (ref 49): at most ONE physically-held
+-- key contributes its generated chord to the pool at a time - the "active"
+-- key, chosen by Last/Highest/Lowest - rather than every held
 -- key's chord stacking together. Holding a second key while the first is
 -- still down retriggers on it when it wins priority (Last always does;
 -- Highest/Lowest only when it actually outranks what is already held);
 -- releasing the active key falls back to whichever held key wins next,
 -- adding ITS notes fresh (they were never added while it was losing the
--- competition). Off-mode (Harmony Mode Off) is untouched by any of this -
+-- competition). Off-mode (Chord Mode Off) is untouched by any of this -
 -- every held key still feeds the arp's pool simultaneously, which is the
 -- ordinary arpeggiator behaviour and has nothing to do with priority.
-local shapeHeld = {}                 -- note -> velocity, physically held keys while Harmony Mode is Shape or SATB
+local shapeHeld = {}                 -- note -> velocity, physically held keys while Chord Mode is Shape or SATB
 local shapePressOrder = {}           -- press order stack (for Last priority), most recent last
 local shapeActiveKey = nil           -- the physical key currently contributing its generated notes, or nil
 
@@ -1121,172 +1383,13 @@ local function onKeyUp(note)
   end
 end
 
--- Chord Mode. Turn Capture on, play the chord shape - on one hand, two
--- hands, one finger at a time, released and re-pressed, however it takes -
--- then turn Capture off: every distinct note struck while it was on becomes
--- the stored chord, the lowest of them its root, every note's offset from
--- that root kept. From then on, striking a key plays the whole stored
--- chord transposed so its root lands on that key - using that key's own
--- velocity for every generated note. It listens on the arp's own source
--- and plays through the arp's own destination (srcMatches()/destRoute()
--- above) rather than carrying a route of its own.
---
--- Nothing sounds while Capture is on - it is a recording gesture, not a
--- performance - and nothing sounds before a chord has ever been captured
--- either, since sharing the arp's input means every note the arp sees,
--- Chord Mode sees too, and passing it through again would double it on the
--- wire.
---
--- Only ONE chord sounds at a time - whichever physically-held key wins
--- Note Priority (ref 49, see above). Holding a second key while the first
--- is down retriggers on the new key when it takes priority (Last always
--- does; Highest/Lowest only when the new key actually out-ranks what is
--- already held); releasing the key that currently has priority falls back
--- to whichever held key wins next, retriggering that one, rather than
--- going silent while other keys are still down.
-local function stopAllChordNotes()
-  local iface, port, chan = destRoute()
-  for _, n in ipairs(chordActiveSentNotes) do
-    midi.sendNoteOff(iface, port, chan, n, 0)
-  end
-  chordActiveNote = nil
-  chordActiveSentNotes = {}
-end
-
--- Which physically-held key should be driving the chord right now, under
--- the current Note Priority. `nil` when nothing is held.
-local function activeChordNote()
-  local priority = cfgList(49)
-
-  if priority == CHORD_PRIORITY_HIGHEST or priority == CHORD_PRIORITY_LOWEST then
-    local best = nil
-    for n in pairs(chordHeld) do
-      if best == nil then
-        best = n
-      elseif priority == CHORD_PRIORITY_HIGHEST and n > best then
-        best = n
-      elseif priority == CHORD_PRIORITY_LOWEST and n < best then
-        best = n
-      end
-    end
-    return best
-  end
-
-  -- Last (the default): whichever is nearest the end of the press stack
-  -- and still actually held - a key that was pressed after the winner but
-  -- has since been released does not count.
-  for i = #chordPressOrder, 1, -1 do
-    if chordHeld[chordPressOrder[i]] ~= nil then
-      return chordPressOrder[i]
-    end
-  end
-  return nil
-end
-
--- Sounds the stored chord rooted on `note`, replacing whatever was
--- sounding before. Does nothing (and does not touch what is already
--- sounding) when no chord has been captured yet.
---
--- Deliberately NOT run through quantizeToScale(): Chord Capture's whole
--- point (see the long comment above) is reproducing a hand-played chord
--- exactly - "an awkward Cmin7 voicing" is the example given there - and
--- snapping its intervals to Key/Scale on every replay would quietly turn
--- a minor third into a major one, or whatever else the scale disagreed
--- with, the moment the chord was struck on a different root. That is
--- Shape mode's job (it reads degrees FROM the scale on purpose); Chord
--- Capture only transposes the exact semitone offsets it captured.
-local function triggerChord(note)
-  if not (chordArmed and chordOffsets) then return end
-
-  stopAllChordNotes()
-
-  local velocity = chordHeld[note] or 100
-  local iface, port, chan = destRoute()
-  local sent = {}
-  for _, offset in ipairs(chordOffsets) do
-    local n = math.floor(helpers.clamp(note + offset, 0, 127))
-    sent[#sent + 1] = n
-  end
-
-  if cfgValue(43) > 0 then
-    sendBrokenNotes(sent, function() return velocity end, iface, port, chan)
-  else
-    for _, n in ipairs(sent) do
-      midi.sendNoteOn(iface, port, chan, n, velocity)
-      if debugSentNotesHook then debugSentNotesHook(n) end
-    end
-  end
-
-  chordActiveNote = note
-  chordActiveSentNotes = sent
-end
-
--- The Chord Armed pad is purely a display: grey when no chord is stored,
--- green once one is. It does nothing when pressed - only chordArmed
--- changing moves it, from the places that change chordArmed.
-local function updateChordArmedIndicator()
-  controls.get(31):setColor(chordArmed and GREEN or 0x606060)
-end
-
--- Chord Capture only operates while Chord Mode is Off - a struck key's
--- meaning is already spoken for by Shape otherwise, and there is nothing
--- useful left for Capture to record or trigger.
-local function onChordKeyDown(note, velocity)
-  if chordMode() ~= CHORD_MODE_OFF then return end
-
-  chordHeld[note] = velocity
-  chordPressOrder[#chordPressOrder + 1] = note
-
-  if chordCapturing then
-    chordCaptureNotes[note] = velocity   -- recorded even if released before Capture goes off
-    return                               -- silent while actively capturing
-  end
-
-  local winner = activeChordNote()
-  if winner ~= nil and winner ~= chordActiveNote then
-    triggerChord(winner)
-  end
-end
-
-local function onChordKeyUp(note)
-  if chordMode() ~= CHORD_MODE_OFF then return end
-
-  chordHeld[note] = nil
-  for i = #chordPressOrder, 1, -1 do
-    if chordPressOrder[i] == note then table.remove(chordPressOrder, i) end
-  end
-  -- Note: chordCaptureNotes is untouched here - a note released mid-capture
-  -- still counts towards the chord once Capture goes off.
-
-  if note ~= chordActiveNote then return end   -- some other held key still has priority; nothing changes
-
-  -- HOLD on: leave the chord sounding and chordActiveNote as it stands,
-  -- exactly as if the key were still down - a later key press still
-  -- retriggers normally (its winner differs from chordActiveNote), and
-  -- turning HOLD off with nothing held stops it (see onHoldChange).
-  if holdActive() then return end
-
-  stopAllChordNotes()
-  local winner = activeChordNote()
-  if winner ~= nil then
-    triggerChord(winner)
-  end
-end
-
 -- Note Priority changing with keys currently down re-evaluates who should
--- be sounding right now, same as onChordKeyDown/Up - without this, picking
--- Highest while a lower key happens to be the one sounding would leave it
--- sounding until the next physical key event. Shared between Chord Capture
--- (Chord Mode Off) and Shape (Chord Mode Shape) - only one of the two is
--- ever live at once, gated by chordMode(), same as everywhere else.
+-- be sounding right now - without this, picking Highest while a lower key
+-- happens to be the one sounding would leave it sounding until the next
+-- physical key event. Only meaningful under Shape/SATB; Chord Mode Off has
+-- nothing that reads Note Priority.
 function onChordPriorityChange(valueObject, value)
-  if chordMode() == CHORD_MODE_OFF then
-    if next(chordHeld) == nil then return end
-    local winner = activeChordNote()
-    if winner ~= nil and winner ~= chordActiveNote then
-      triggerChord(winner)
-    end
-  elseif chordMode() == CHORD_MODE_SHAPE or chordMode() == CHORD_MODE_SATB then
+  if chordMode() == CHORD_MODE_SHAPE or chordMode() == CHORD_MODE_SATB then
     if next(shapeHeld) == nil then return end
     local winner = activeShapeNote()
     if winner ~= nil and winner ~= shapeActiveKey then
@@ -1549,24 +1652,27 @@ local function advanceStep(isOffBeat)
   end
 end
 
--- An external momentary/latching MIDI switch can drive Arp On/Off, Chord
--- Capture and HOLD directly, on its own CC numbers and its own routing -
--- refs 45/46/47 (Switch Interface/Port/Channel, Config page) - separate
--- from the arp's own source routing (3/4/5), since a footswitch is
--- commonly on a different port (USB Host, say) from the keyboard/synth
--- sending notes, and the two should be free to differ. CC 126 toggles Arp
--- On/Off (ref 29); CC 127 toggles Chord Capture (ref 26); CC 125 toggles
--- HOLD (ref 53) - all standard on/off switch CCs, 0 = off, 127 = on
--- (>=64 counts as on, so a switch that is not perfectly 0/127 still
--- works). setValue() (not updateValue()) is used deliberately: it runs
--- the control's own function (onArpToggle/onChordCapture/onHoldChange)
--- exactly as pressing the pad by hand would, so every existing on/off
--- side effect (silencing notes, starting/stopping the timer, opening/
--- closing the capture window) happens the same way regardless of what
--- triggered it.
+-- An external momentary/latching MIDI switch can drive Arp On/Off and HOLD
+-- directly, on its own CC numbers and its own routing - refs 45/46/47
+-- (Switch Interface/Port/Channel, Config page) - separate from the arp's
+-- own source routing (3/4/5), since a footswitch is commonly on a
+-- different port (USB Host, say) from the keyboard/synth sending notes,
+-- and the two should be free to differ. CC 126 toggles Arp On/Off (ref 29);
+-- CC 125 toggles HOLD (ref 53) - both standard on/off switch CCs, 0 = off,
+-- 127 = on (>=64 counts as on, so a switch that is not perfectly 0/127
+-- still works). setValue() (not updateValue()) is used deliberately: it
+-- runs the control's own function (onArpToggle/onHoldChange) exactly as
+-- pressing the pad by hand would, so every existing on/off side effect
+-- (silencing notes, starting/stopping the timer) happens the same way
+-- regardless of what triggered it.
 local EXTERNAL_ARP_CC = 126
-local EXTERNAL_CAPTURE_CC = 127
 local EXTERNAL_HOLD_CC = 125
+
+-- Mod wheel (CC 1): forwarded from the source route to the destination
+-- route for the same reason pitch bend and aftertouch are (see
+-- midi.onPitchBend etc. below) - it is channel-wide, like pitch bend and
+-- channel aftertouch, so it forwards unchanged, just on the other channel.
+local MOD_WHEEL_CC = 1
 
 local function switchRoute()
   return cfgList(45), cfgList(46), cfgList(47)
@@ -1605,14 +1711,28 @@ function onPositionChange(valueObject, value)
   regenerateShapeNotes()
 end
 
+-- RETRIGGER: nothing needs to react live - retriggerOnShapeChange() above
+-- reads it fresh every time regenerateShapeNotes() runs. The function
+-- exists only because every control here is declared with one.
+function onShapeRetriggerChange(valueObject, value)
+end
+
 function midi.onControlChange(midiInput, channel, controllerNumber, value)
-  local iface, port, chan = switchRoute()
-  if midiInput.interface ~= iface or midiInput.port ~= port or channel ~= chan then return end
+  -- Mod wheel pass-through and the external switch share this one callback
+  -- but watch two different, independent routes - a footswitch is commonly
+  -- on a different port from the keyboard sending notes and CC1 (see the
+  -- comment above EXTERNAL_ARP_CC) - so each is checked on its own route
+  -- rather than one shared guard at the top.
+  if controllerNumber == MOD_WHEEL_CC and srcMatches(midiInput, channel) then
+    local iface, port, chan = destRoute()
+    midi.sendControlChange(iface, port, chan, MOD_WHEEL_CC, value)
+  end
+
+  local swIface, swPort, swChan = switchRoute()
+  if midiInput.interface ~= swIface or midiInput.port ~= swPort or channel ~= swChan then return end
 
   if controllerNumber == EXTERNAL_ARP_CC then
     controls.get(29):getValue():setValue(value >= 64 and 1 or 0)
-  elseif controllerNumber == EXTERNAL_CAPTURE_CC then
-    controls.get(26):getValue():setValue(value >= 64 and 1 or 0)
   elseif controllerNumber == EXTERNAL_HOLD_CC then
     controls.get(53):getValue():setValue(value >= 64 and 1 or 0)
   end
@@ -1624,10 +1744,8 @@ function midi.onNoteOn(midiInput, channel, noteNumber, velocity)
 
   if velocity == 0 then
     onKeyUp(noteNumber)
-    onChordKeyUp(noteNumber)
   else
     onKeyDown(noteNumber, velocity)
-    onChordKeyDown(noteNumber, velocity)
   end
 end
 
@@ -1635,7 +1753,94 @@ function midi.onNoteOff(midiInput, channel, noteNumber, velocity)
   if not srcMatches(midiInput, channel) then return end
   if not noteInRange(noteNumber) then return end
   onKeyUp(noteNumber)
-  onChordKeyUp(noteNumber)
+end
+
+-- Pitch bend, channel aftertouch, poly aftertouch and mod wheel (CC 1, in
+-- midi.onControlChange below) are not notes - the arp/Shape engines above
+-- have nothing to say about them - but a keyboard playing
+-- into this preset on its own source channel can still want them heard by
+-- the synth on the destination channel. Without this they are simply never
+-- forwarded: the preset only ever reads notes from the source and writes
+-- notes (or generated chords) to the destination, so anything else the
+-- keyboard sends just stops here.
+--
+-- Pitch bend and channel aftertouch are channel-wide, not per-note, so
+-- they forward exactly as received - only the route (and so the channel)
+-- changes, same as every note.
+function midi.onPitchBend(midiInput, channel, value)
+  if not srcMatches(midiInput, channel) then return end
+  local iface, port, chan = destRoute()
+  midi.sendPitchBend(iface, port, chan, value)
+end
+
+function midi.onAfterTouchChannel(midiInput, channel, pressure)
+  if not srcMatches(midiInput, channel) then return end
+  local iface, port, chan = destRoute()
+  midi.sendAfterTouchChannel(iface, port, chan, pressure)
+end
+
+-- Poly (key) aftertouch names a note, and in Shape/SATB mode the note the
+-- key actually sounds on the destination is not the struck note - it is
+-- whatever notesForKey() generated for it (keyGeneratedNotes[noteNumber]).
+-- So it is forwarded to every one of THOSE notes instead of the raw key
+-- number, which would not correspond to anything sounding. In Chord Mode
+-- Off (plain arp or nothing at all) the struck note and the sounding note
+-- are the same thing, so it forwards unchanged.
+function midi.onAfterTouchPoly(midiInput, channel, noteNumber, pressure)
+  if not srcMatches(midiInput, channel) then return end
+  local iface, port, chan = destRoute()
+
+  local mode = chordMode()
+  if mode == CHORD_MODE_SHAPE or mode == CHORD_MODE_SATB then
+    local notes = keyGeneratedNotes[noteNumber]
+    if notes then
+      for _, n in ipairs(notes) do
+        midi.sendAfterTouchPoly(iface, port, chan, n, pressure)
+      end
+    end
+  else
+    midi.sendAfterTouchPoly(iface, port, chan, noteNumber, pressure)
+  end
+end
+
+-- External clock: steps are driven by incoming MIDI clock pulses (24 per
+-- quarter note) rather than the timer. Only live while the arp is on and
+-- CLOCK SRC is External; a clock from any other interface/port is ignored,
+-- same as notes are gated by srcMatches(). SYNC still sets the beat value
+-- per step (ticksPerStepFor()); TEMPO is not read at all here.
+function midi.onClock(midiInput)
+  if not isArpOn() then return end
+  if not clockIsExternal() then return end
+  if not srcPortMatches(midiInput) then return end
+
+  extClockCount = extClockCount + 1
+  local ticksPerStep = ticksPerStepFor()
+  if extClockCount >= ticksPerStep then
+    extClockCount = extClockCount - ticksPerStep
+    advanceStep(swingParity == 1)
+    swingParity = (swingParity + 1) % 2
+  end
+end
+
+function midi.onStart(midiInput)
+  if not clockIsExternal() then return end
+  if not srcPortMatches(midiInput) then return end
+  extClockCount = 0
+  stepIndex, direction = 0, 1
+  swingParity = 0
+  stopCurrent()
+end
+
+function midi.onContinue(midiInput)
+  if not clockIsExternal() then return end
+  if not srcPortMatches(midiInput) then return end
+  extClockCount = 0
+end
+
+function midi.onStop(midiInput)
+  if not clockIsExternal() then return end
+  if not srcPortMatches(midiInput) then return end
+  stopCurrent()
 end
 
 function timer.onTick(ticks)
@@ -1654,6 +1859,7 @@ function timer.onTick(ticks)
 end
 
 function onTempoChange(valueObject, value)
+  if clockIsExternal() then return end   -- TEMPO does nothing while CLOCK SRC is External
   timer.setPeriod(basePeriodMs())
 end
 
@@ -1675,20 +1881,19 @@ function formatBreakTime(valueObject, value)
 end
 
 -- Break Time/Direction (refs 43/44) are for the "broken chord" feature:
--- spreading a Shape-mode or Chord-Capture chord's notes out in time
--- instead of sounding them all at once, since either one is generated
--- instantly from a single keystroke. See sendBrokenNotes()/orderForBreak()
--- above for the engine: when Break Time is above 0, a chord's notes fire
--- one by one, ordered by Break Direction (Up/Down/Alternating), spread
--- evenly so the first sounds at once and the last exactly Break Time ms
--- later. Note-off is NOT broken - a release (or a fresh trigger replacing
--- the chord) stops every sounding note at once, which is the simplest
--- answer to "how does a chord already breaking react to a mid-break
--- release" and the one open question this round settles by not trying to
--- be clever about it. Latch interaction is otherwise unaffected: Break
--- plugs into the same two note-producing places (addGeneratedNotes() for
--- Shape mode sounding directly, triggerChord() for Chord Capture) and
--- changes nothing about when those places are called.
+-- spreading a Shape-mode chord's notes out in time instead of sounding
+-- them all at once, since it is generated instantly from a single
+-- keystroke. See sendBrokenNotes()/orderForBreak() above for the engine:
+-- when Break Time is above 0, a chord's notes fire one by one, ordered by
+-- Break Direction (Up/Down/Alternating), spread evenly so the first sounds
+-- at once and the last exactly Break Time ms later. Note-off is NOT broken
+-- - a release (or a fresh trigger replacing the chord) stops every
+-- sounding note at once, which is the simplest answer to "how does a
+-- chord already breaking react to a mid-break release" and the one open
+-- question this round settles by not trying to be clever about it. Latch
+-- interaction is otherwise unaffected: Break plugs into
+-- addGeneratedNotes() (Shape mode sounding directly) and changes nothing
+-- about when it is called.
 --
 -- Break and the ARP still cannot run together, because they are two
 -- different engines competing for the same single keystroke:
@@ -1736,28 +1941,18 @@ end
 function onTransposeOctaveChange(valueObject, value)
 end
 
--- The Mode control's own cached display text only recomputes when Mode's
--- OWN value changes (value:getText() is composed "the last time the value
--- changed" - see ControlValue in the reference - and Scale changing is a
--- different control, so it never retriggers Mode's formatter). Measured on
--- the instrument: selecting Major after Mode was already showing "4" left
--- it reading "4" forever, never "Lydian", until Mode itself was turned.
--- setOverride() sidesteps the stale cache outright - it is drawn as given,
--- not derived from anything cached - so every call here recomputes the
--- full text itself rather than leaning on formatModeName's own cache.
-local function refreshModeDisplay()
-  local scale = cfgList(34)
-  local mode = cfgList(27)
-  local text = (scale == 1) and MAJOR_MODE_NAMES[mode] or nil
-  controls.get(27):setOverride(text or tostring(mode + 1))
-end
-
+-- Scale decides both how many Mode choices make sense and what they are
+-- called (modeChoiceCountForScale()/modeNamesForScale() above), so every
+-- Scale change rebuilds Mode's overlay outright - see rebuildModeOverlay().
 function onScaleChange(valueObject, value)
-  refreshModeDisplay()
+  rebuildModeOverlay()
 end
 
+-- Nothing needs to react live - the overlay already carries the right
+-- label for whatever Mode is turned to; rebuildModeOverlay() is only
+-- needed when the choices THEMSELVES change, i.e. on a Scale change. The
+-- function exists only because every control here is declared with one.
 function onModeChange(valueObject, value)
-  refreshModeDisplay()
 end
 
 -- Shape changes the notes a struck key generates, so anything already
@@ -1773,17 +1968,10 @@ function onInversionChange(valueObject, value)
   regenerateShapeNotes()
 end
 
--- Shared between onChordModeChange (an ordinary switch) and onChordCapture
--- (Capture turning on while Shape is selected, which switches the mode
--- back to Off as a side effect): everything a mode change needs to settle
--- EXCEPT Chord Capture's own chordCapturing/chordCaptureNotes - those are
--- deliberately left to the caller. onChordModeChange always resets them
--- (an ordinary switch should drop a stray capture), but onChordCapture is
--- switching the mode in order to START a capture, and must not have that
--- capture wiped out a moment later by the same cleanup that switching the
--- mode would otherwise do unconditionally - see onChordCapture below for
--- how this bit the first version of this coupling.
+-- Everything a Harmony Mode change needs to settle: called from
+-- onChordModeChange() below, an ordinary switch.
 local function settleModeChange()
+  cancelHoldFade(true)
   -- Anything the OLD mode was sounding directly (Shape, arp off) must be
   -- silenced before the tables that remember it are wiped below. chordMode()
   -- would read the NEW value already (this control's own value has already
@@ -1800,57 +1988,16 @@ local function settleModeChange()
   held, pressOrder, keysDown, noteRefCount, keyGeneratedNotes, keyVelocity = {}, {}, {}, {}, {}, {}
   shapeHeld, shapePressOrder, shapeActiveKey = {}, {}, nil
   stepIndex, direction = 0, 1
-
-  stopAllChordNotes()
-  chordHeld, chordPressOrder = {}, {}
 end
 
 -- Chord Mode decides what a struck key means, so switching it silences
 -- everything outright rather than leaving the old meaning's notes stuck
--- sounding under the new one - both the arp's own held notes and whatever
--- Chord Capture had going (which also stops reacting entirely once this is
--- Shape; see the guard at the top of onChordKeyDown()/onChordKeyUp()).
+-- sounding under the new one.
 function onChordModeChange(valueObject, value)
-  -- Chord Capture and Shape/SATB are alternative chord-to-key mappings and
-  -- cannot both be live: switching TO either clears Chord Capture outright,
-  -- exactly as pressing CLR CHORD would - any chord already armed (the
-  -- indicator showing green) is dropped, not left standing under a mode
-  -- that no longer reads a struck key that way, and a capture window left
-  -- open is abandoned rather than finalized. This calls clearChordCapture()
-  -- DIRECTLY rather than going through CLR CHORD's own control value: a
-  -- nested setValue() made from inside another value's own function is
-  -- not run inline here - it is only applied once this whole function
-  -- returns - so by the time it would run, the resets a few lines below
-  -- would already have touched the same state. Calling the logic directly
-  -- keeps the order right; updateValue() then moves the Capture pad to
-  -- match without re-running its own function a second time.
-  if value == CHORD_MODE_SHAPE or value == CHORD_MODE_SATB then
-    clearChordCapture()
-    if controls.get(26):getValue():getValue() == 1 then
-      controls.get(26):getValue():updateValue(0)
-    end
-  end
-
   settleModeChange()
-  chordCapturing = false
-  chordCaptureNotes = {}
 
   lastChordMode = chordMode()
-  updateHarmonyParamVisibility()
-end
-
--- Named modes only make sense for the Major scale, and only up to its own
--- seven degrees; everything else - another scale, or a Mode value beyond
--- what the current scale has - shows the plain number instead (the control's
--- raw value is 0-based; the player sees it labelled 1..12, so the fallback
--- adds 1 back).
-function formatModeName(valueObject, value)
-  local scale = cfgList(34)
-  if scale == 1 then
-    local name = MAJOR_MODE_NAMES[value]
-    if name then return name end
-  end
-  return tostring(value + 1)
+  updateChordParamVisibility()
 end
 
 function onTransposeSemitoneChange(valueObject, value)
@@ -1862,10 +2009,39 @@ function onSwingChange(valueObject, value)
 end
 
 function onSyncChange(valueObject, value)
+  if clockIsExternal() then return end
   timer.setPeriod(basePeriodMs())
 end
 
+-- CLOCK IFACE/PORT: nothing needs to react live - srcPortMatches() above
+-- reads them fresh on every incoming clock message. The function exists
+-- only because every control here is declared with one (recipe 33.14).
+function onClockRouteChange(valueObject, value)
+end
+
+-- CLOCK SRC itself. Switching stops whatever is sounding and resets the
+-- step position, then starts whichever engine now owns stepping: the timer
+-- for Internal (if the arp is on), or nothing for External - stepping then
+-- comes from midi.onClock as pulses arrive.
+function onClockSourceChange(valueObject, value)
+  cancelHoldFade(true)
+  stopCurrent()
+  extClockCount = 0
+  swingParity = 0
+  stepIndex, direction = 0, 1
+
+  if not isArpOn() then return end
+
+  if value == CLOCK_EXTERNAL then
+    timer.disable()
+  else
+    timer.setPeriod(basePeriodMs())
+    timer.enable()
+  end
+end
+
 function onLatchChange(valueObject, value)
+  cancelHoldFade(true)
   -- value is the list's labelled value (0 Off, 1 Normal, 2 Chord), not an
   -- index - textValues were declared 0/1/2 so the two agree here.
   if value == LATCH_OFF then
@@ -1901,10 +2077,10 @@ function onLatchChange(valueObject, value)
   end
 end
 
--- Destination moved: silence the old route before anything plays on the new
--- - for both the arp and Chord Mode, since they now share this destination.
+-- Destination moved: silence the old route before anything plays on the new.
 -- Includes whatever Shape was sounding directly with the arp off.
 function onDestChange(valueObject, value)
+  cancelHoldFade(true)
   if shouldSoundShapeDirectly() then
     local iface, port, chan = destRoute()
     for n in pairs(noteRefCount) do
@@ -1912,12 +2088,12 @@ function onDestChange(valueObject, value)
     end
   end
   stopCurrent()
-  stopAllChordNotes()
 end
 
 -- Source moved: the keys held on the old source will never send their
--- note-off, for either the arp or Chord Capture, since they now share it.
+-- note-off.
 function onSourceChange(valueObject, value)
+  cancelHoldFade(true)
   if shouldSoundShapeDirectly() then
     local iface, port, chan = destRoute()
     for n in pairs(noteRefCount) do
@@ -1928,104 +2104,6 @@ function onSourceChange(valueObject, value)
   held, pressOrder, keysDown, noteRefCount, keyGeneratedNotes, keyVelocity = {}, {}, {}, {}, {}, {}
   shapeHeld, shapePressOrder, shapeActiveKey = {}, {}, nil
   stepIndex, direction = 0, 1
-
-  stopAllChordNotes()
-  chordHeld, chordPressOrder = {}, {}
-  -- A capture in progress was listening on the old source too; abandon it
-  -- rather than finish it with notes from a route that no longer applies.
-  chordCapturing = false
-  chordCaptureNotes = {}
-end
-
--- The Capture toggle. Turning it ON opens a recording window - seeded with
--- whatever is already held, so starting the gesture with keys already down
--- still counts - and every note struck while it is open is remembered,
--- whether or not it is still held when the window closes. Turning it OFF
--- closes the window and, if anything was played during it, replaces the
--- stored chord with it; an empty window (toggled on and off with nothing
--- played) leaves whatever was captured before untouched.
--- Finalizes whatever was played during a capture window: turns the notes
--- struck into offsets from their lowest, arms the chord, and updates the
--- indicator. Called from onChordCapture() when the player turns Capture
--- off by hand, and called DIRECTLY (not through Capture's control value)
--- from onChordModeChange() when switching to Shape turns Capture off for
--- the player - see the long comment there for why a nested setValue()
--- cannot be trusted to run before onChordModeChange's own state resets do.
-finalizeCapture = function()
-  chordCapturing = false
-
-  local notes = {}
-  for note in pairs(chordCaptureNotes) do notes[#notes + 1] = note end
-  chordCaptureNotes = {}
-  if #notes == 0 then return end       -- nothing played during the window: leave the old chord alone
-
-  table.sort(notes)
-  local root = notes[1]
-  local offsets = {}
-  for _, note in ipairs(notes) do
-    offsets[#offsets + 1] = note - root
-  end
-
-  chordOffsets = offsets
-  chordArmed = true
-  updateChordArmedIndicator()
-end
-
-function onChordCapture(valueObject, value)
-  if value == 1 then
-    -- Chord Capture and Shape/SATB are alternative chord-to-key mappings
-    -- and cannot both be live: turning Capture on while either is selected
-    -- hands the keystroke back to Capture - every side effect of leaving
-    -- it (silencing whatever it was sounding directly, etc) via
-    -- settleModeChange(), the same helper onChordModeChange uses.
-    --
-    -- This does NOT go through Chord Mode's own setValue(): a nested
-    -- setValue() made from inside another value's own function is not
-    -- run inline - it is only applied once this whole function returns -
-    -- and onChordModeChange's generic cleanup unconditionally resets
-    -- chordCapturing/chordCaptureNotes. Were this call left as a nested
-    -- setValue(), that deferred reset would land AFTER the capturing
-    -- session started below and silently cancel it - found by testing
-    -- exactly this sequence (Shape selected, Capture pressed, chord
-    -- played) and getting the Shape default chord back instead of what
-    -- was played. Calling settleModeChange() directly and moving the
-    -- control with updateValue() keeps the order right and never
-    -- re-enters onChordModeChange at all.
-    if chordMode() == CHORD_MODE_SHAPE or chordMode() == CHORD_MODE_SATB then
-      settleModeChange()
-      lastChordMode = CHORD_MODE_OFF
-      controls.get(37):getValue():updateValue(CHORD_MODE_OFF)
-      updateHarmonyParamVisibility()
-    end
-
-    chordCapturing = true
-    chordCaptureNotes = {}
-    for note, vel in pairs(chordHeld) do
-      chordCaptureNotes[note] = vel
-    end
-    return
-  end
-
-  finalizeCapture()
-end
-
--- Clears the stored chord outright: anything still sounding from it stops,
--- any capture window left open is abandoned, and every key struck
--- afterwards is silent again until a new chord is captured - exactly like
--- the state before anything was ever captured. Fires on press only.
-clearChordCapture = function()
-  stopAllChordNotes()
-  chordArmed = false
-  chordOffsets = nil
-  chordCapturing = false
-  chordCaptureNotes = {}
-  updateChordArmedIndicator()
-end
-
-function onChordClear(valueObject, value)
-  if value == 0 then return end
-
-  clearChordCapture()
 end
 
 -- The arp's own on/off switch. Chord Mode is unaffected either way - only
@@ -2048,15 +2126,48 @@ function onArpReset(valueObject, value)
   shuffledOrder, shuffledPos = nil, 1
 end
 
--- HOLD (ref 53): keeps a directly-sounding chord (Shape/SATB or Chord
--- Capture) ringing after the key that struck it is released, until HOLD
--- itself is turned off. It cannot run together with the arp - a struck
+-- PANIC (ref 56): a stuck note is the one failure mode none of the clean
+-- state transitions above can promise to catch - a message dropped on a
+-- flaky USB link, a destination changed by hand faster than
+-- onDestChange's own cleanup could keep up with, or a synth that simply
+-- missed one. Unlike every other reset in this script, PANIC does not
+-- trust the script's own bookkeeping of what is sounding: it blasts
+-- CC 123 (All Notes Off) and CC 120 (All Sound Off) on EVERY channel
+-- 1..16 of the current destination route, not just the one channel the
+-- script believes is in use, and only then clears every table that
+-- tracks a sounding note - so nothing stale gets "released" again later
+-- and nothing re-sounds on its own.
+function onPanic(valueObject, value)
+  if value == 0 then return end   -- fires on press only, like Arp Reset/Clear
+
+  cancelHoldFade(true)
+  stopCurrent()
+
+  local iface, port = cfgList(6), cfgList(7)
+  for ch = 1, 16 do
+    midi.sendControlChange(iface, port, ch, 123, 0)   -- All Notes Off
+    midi.sendControlChange(iface, port, ch, 120, 0)   -- All Sound Off
+  end
+
+  held, pressOrder, keysDown, currentNote = {}, {}, {}, nil
+  noteRefCount, keyGeneratedNotes, keyVelocity = {}, {}, {}
+  shapeHeld, shapePressOrder, shapeActiveKey = {}, {}, nil
+  stepIndex, direction = 0, 1
+  shuffledOrder, shuffledPos = nil, 1
+  swingParity = 0
+  extClockCount = 0
+end
+
+-- HOLD (ref 53): keeps a directly-sounding Shape/SATB chord ringing after
+-- the key that struck it is released, until HOLD itself is turned off. It
+-- cannot run together with the arp - a struck
 -- key's release has nothing to do with the arp - so the two compete for
 -- the same keystroke exactly the way Break Time and the arp already do
 -- (onBreakTimeChange/onArpToggle): turning HOLD on hands the keystroke
 -- back from the arp, turning the arp on takes it back from HOLD.
 function onHoldChange(valueObject, value)
   if value == 1 then
+    cancelHoldFade(true)   -- Hold back on: cancel any fade and keep sounding at full volume
     if isArpOn() then
       controls.get(29):getValue():setValue(0)   -- Arp: off, HOLD has the keystroke now
     end
@@ -2064,21 +2175,60 @@ function onHoldChange(valueObject, value)
   end
 
   -- HOLD turned off: anything only still sounding because of it, with
-  -- nothing physically holding it any more, should stop now.
+  -- nothing physically holding it any more, fades out over RELEASE (ref 35)
+  -- instead of stopping dead - see fadeOutAndRelease() above. The
+  -- bookkeeping (noteRefCount, keyGeneratedNotes, ...) is settled right
+  -- now, exactly as the instant version did; only the actual MIDI note-off
+  -- and the Expression ramp ahead of it are deferred.
   local mode = chordMode()
   if mode == CHORD_MODE_SHAPE or mode == CHORD_MODE_SATB then
     if shapeActiveKey ~= nil and shapeHeld[shapeActiveKey] == nil then
-      removeGeneratedNotes(shapeActiveKey)
+      local key = shapeActiveKey
+      local notes = keyGeneratedNotes[key] or {}
       shapeActiveKey = nil
-    end
-  elseif mode == CHORD_MODE_OFF then
-    if chordActiveNote ~= nil and chordHeld[chordActiveNote] == nil then
-      stopAllChordNotes()
+      keyGeneratedNotes[key] = nil
+      keyVelocity[key] = nil
+
+      local iface, port, chan = destRoute()
+      local toRelease = {}
+      for _, n in ipairs(notes) do
+        local count = (noteRefCount[n] or 1) - 1
+        if count <= 0 then
+          noteRefCount[n] = nil
+          releaseNote(n)
+          toRelease[#toRelease + 1] = n
+        else
+          noteRefCount[n] = count
+        end
+      end
+      fadeOutAndRelease(toRelease, iface, port, chan)
     end
   end
 end
 
+function formatReleaseTime(valueObject, value)
+  return string.format("%.1f s", value / 10)
+end
+
+-- Nothing needs to react live - fadeOutAndRelease() reads RELEASE fresh
+-- every time HOLD is switched off. The function exists only because every
+-- control here is declared with one (recipe 33.14).
+function onReleaseTimeChange(valueObject, value)
+end
+
+function formatFadeCc(valueObject, value)
+  return "CC " .. value
+end
+
+-- Nothing needs to react live - scheduleFadeStep() reads FADE CC fresh on
+-- every 50ms step, so a change mid-ramp takes effect on the next step
+-- rather than waiting for a fresh HOLD release. The function exists only
+-- because every control here is declared with one (recipe 33.14).
+function onFadeCcChange(valueObject, value)
+end
+
 function onArpToggle(valueObject, value)
+  cancelHoldFade(true)
   if value == 1 then
     -- The arp and Break Time compete for the same keystroke (see
     -- onBreakTimeChange above) - turning the arp on hands the keystroke
@@ -2101,8 +2251,13 @@ function onArpToggle(valueObject, value)
       end
     end
     swingParity = 0
-    timer.setPeriod(basePeriodMs())
-    timer.enable()
+    if clockIsExternal() then
+      extClockCount = 0
+      timer.disable()
+    else
+      timer.setPeriod(basePeriodMs())
+      timer.enable()
+    end
   else
     timer.disable()
     stopCurrent()
@@ -2119,9 +2274,9 @@ function onArpToggle(valueObject, value)
 end
 
 function preset.onReady()
+  cancelHoldFade(true)
   local iface, port, chan = destRoute()
-  -- All Notes Off: a reload forgets what it was sounding, for the arp and
-  -- for Chord Capture, since both share this destination.
+  -- All Notes Off: a reload forgets what it was sounding.
   midi.sendControlChange(iface, port, chan, 123, 0)
   held, pressOrder, keysDown, currentNote = {}, {}, {}, nil
   noteRefCount, keyGeneratedNotes, keyVelocity = {}, {}, {}
@@ -2129,40 +2284,35 @@ function preset.onReady()
   stepIndex, direction = 0, 1
   shuffledOrder, shuffledPos = nil, 1
   swingParity = 0
-  timer.setPeriod(basePeriodMs())
+  extClockCount = 0
   -- Respect the Arp On/Off control's own loaded value (its function has
   -- already run by this point, same as every other control's) rather than
-  -- forcing the timer on regardless - see recipe 33.13's trap 3.
-  if isArpOn() then
+  -- forcing the timer on regardless - see recipe 33.13's trap 3. Likewise
+  -- CLOCK SRC's own loaded value decides whether the timer or incoming
+  -- MIDI clock drives stepping.
+  if isArpOn() and not clockIsExternal() then
+    timer.setPeriod(basePeriodMs())
     timer.enable()
   else
     timer.disable()
   end
 
-  chordHeld, chordPressOrder, chordActiveNote, chordActiveSentNotes = {}, {}, nil, {}
-  chordCapturing, chordCaptureNotes = false, {}
-  -- A reload's fresh Lua state never remembers a captured chord (chordArmed
-  -- starts false again), so the indicator must be reset to match, not left
-  -- showing whatever colour the project file happens to declare.
-  chordArmed = false
-  updateChordArmedIndicator()
-
-  -- The Mode control's displayed text is driven by setOverride() rather
-  -- than solely by its formatter's cache (see refreshModeDisplay above),
-  -- so it needs setting explicitly on load too.
-  refreshModeDisplay()
+  -- Rebuild Mode's overlay to whatever choice count the loaded Scale
+  -- allows - needed explicitly on load too, same as every other derived
+  -- display state here.
+  rebuildModeOverlay()
 
   -- Sync onChordModeChange()'s memory of "the mode a moment ago" to what
   -- actually loaded, so the first change after a reload compares against
   -- the real starting mode rather than a stale default.
   lastChordMode = chordMode()
-  updateHarmonyParamVisibility()
+  updateChordParamVisibility()
 end
 
 function preset.onExit()
+  cancelHoldFade(true)
   timer.disable()
   stopCurrent()
-  stopAllChordNotes()
   if shouldSoundShapeDirectly() then
     local iface, port, chan = destRoute()
     for n in pairs(noteRefCount) do
