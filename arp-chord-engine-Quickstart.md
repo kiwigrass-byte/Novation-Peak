@@ -78,24 +78,7 @@ Use this when you want structured four-part movement from single-note input.
 
 ---
 
-## 7) Chord Capture quick use (independent tool)
-
-Works only when Harmony Mode is **Off**.
-
-- **Capture** toggle: ref **26**
-- **Clear chord**: ref **30**
-- **Armed indicator**: ref **31** (green = captured chord stored)
-
-Flow:
-1. Set Harmony Mode to Off
-2. Turn Capture ON
-3. Play chord notes (any order/timing)
-4. Turn Capture OFF
-5. Now single keys replay that captured shape transposed
-
----
-
-## 8) Break Time / Direction (broken chord spread)
+## 7) Break Time / Direction (broken chord spread)
 
 - **Break Time** (43): spread chord notes over time (ms)
 - **Break Direction** (44): Up / Down / Alternating
@@ -107,7 +90,7 @@ Important:
 
 ---
 
-## 9) Note Priority (ref 49)
+## 8) Note Priority (ref 49)
 
 Used where one held key must “win”:
 
@@ -121,7 +104,7 @@ Affects:
 
 ---
 
-## 10) HOLD / RELEASE / FADE
+## 9) HOLD / RELEASE / FADE
 
 - **HOLD** (53) keeps directly sounding Shape/SATB chords ringing after key release when the arp is off.
 - **RELEASE** (35) fades held direct chords out when HOLD is turned off.
@@ -131,7 +114,7 @@ HOLD and the arp cannot run together.
 
 ---
 
-## 11) External switch control (optional)
+## 10) External switch control (optional)
 
 Set switch input route on refs **45/46/47**.
 
@@ -142,7 +125,7 @@ On that route:
 
 ---
 
-## 12) Five ready-to-play recipes
+## 11) Five ready-to-play recipes
 
 ## A) Classic arp
 - Harmony Mode: Off
@@ -166,13 +149,7 @@ On that route:
 - HOLD: On
 - Play one key at a time for 4-note stacks.
 
-## D) Captured voicing transposer
-- Harmony Mode: Off
-- Capture ON → play custom voicing → Capture OFF
-- Arp: Off
-- Play melody keys; each triggers captured voicing.
-
-## E) Broken chord performer
+## D) Broken chord performer
 - Harmony Mode: Shape or SATB
 - Arp: Off
 - Break Time: 120–300 ms
@@ -180,11 +157,10 @@ On that route:
 
 ---
 
-## 13) Quick troubleshooting
+## 12) Quick troubleshooting
 
 - **No response to keys**: check source refs 3/4/5
 - **Response but no sound**: check destination refs 6/7/8
-- **Capture seems inactive**: ensure Harmony Mode is Off
 - **Break not working**: make sure Arp is Off
 - **HOLD not doing anything**: remember it only matters for direct Shape/SATB sounding with arp off
 - **Arp not running**: check ref 29 On and tempo/sync values
