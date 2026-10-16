@@ -18,10 +18,7 @@ This preset script combines three note-generation systems:
    - **Shape**: each key generates a diatonic chord shape from Key/Scale/Mode
    - **SATB**: each key generates a four-part harmonization with common-practice / tintinnabuli-style voicing options
 
-3. **Chord Capture** (`ref 26`)  
-   Independent tool for capturing a played chord shape (semitone offsets from lowest note) and replaying/transposing it from single keys.
-
-These systems share source/destination routing and enforce mutual exclusions where needed (notably Shape/SATB vs Capture, and Arp vs Break Time behavior).
+These systems share source/destination routing and enforce mutual exclusions where needed (notably Arp vs Break Time behavior).
 
 ---
 
@@ -229,34 +226,7 @@ Script handles physical key state and generated-note state separately to preserv
 
 ---
 
-## 11) Chord Capture subsystem (independent tool)
-
-Only active when Harmony Mode is **Off**.
-
-## 11.1 Capture flow
-- Toggle Capture on (`ref 26`) opens recording window.
-- Notes played during window are collected (`chordCaptureNotes`), even if released before close.
-- Toggle off finalizes:
-  - sort notes
-  - root = lowest note
-  - store semitone offsets from root (`chordOffsets`)
-  - set `chordArmed = true`
-  - update indicator (`ref 31` green)
-
-Empty capture window leaves prior captured chord unchanged.
-
-## 11.2 Playback
-With captured chord armed:
-- pressing a key transposes stored offsets to that key
-- uses triggering key velocity for all generated notes
-- optional broken playback if Break Time > 0
-
-## 11.3 Clear
-`ref 30` clears armed chord and active capture state, stops sounding captured notes, resets indicator.
-
----
-
-## 12) Break Time / Direction (refs 43/44)
+## 11) Break Time / Direction (refs 43/44)
 
 Break feature spreads chord notes over time:
 - first note immediately
@@ -274,7 +244,7 @@ Release behavior is simple/all-at-once note-off (not staggered off).
 
 ---
 
-## 13) HOLD / RELEASE / FADE
+## 12) HOLD / RELEASE / FADE
 
 - HOLD keeps directly sounding Shape/SATB chords ringing after the key that struck them is released, when the arp is off.
 - Turning HOLD off fades those held direct chords out over RELEASE using FADE CC.
@@ -282,7 +252,7 @@ Release behavior is simple/all-at-once note-off (not staggered off).
 
 ---
 
-## 14) Arp vs Break exclusivity
+## 13) Arp vs Break exclusivity
 
 Mutual handoff logic:
 - If Break Time rises above 0 while arp is on → arp is turned off.
@@ -292,15 +262,15 @@ Implementation uses `setValue()` intentionally so normal side effects run as if 
 
 ---
 
-## 15) Routing and I/O
+## 14) Routing and I/O
 
-## 15.1 Note source
+## 14.1 Note source
 `srcMatches()` compares incoming note route against refs `3/4/5`.
 
-## 15.2 Destination
+## 14.2 Destination
 `destRoute()` reads refs `6/7/8`.
 
-## 15.3 External switch CC input
+## 14.3 External switch CC input
 From refs `45/46/47` route:
 - CC **126** toggles Arp On/Off (`ref 29`)
 - CC **125** toggles HOLD (`ref 53`)
@@ -308,7 +278,7 @@ From refs `45/46/47` route:
 
 ---
 
-## 16) Initialization / lifecycle
+## 15) Initialization / lifecycle
 
 ## `preset.onReady()`
 - sends All Notes Off to destination
@@ -326,7 +296,7 @@ From refs `45/46/47` route:
 
 ---
 
-## 17) Key helper functions (developer index)
+## 16) Key helper functions (developer index)
 
 - **Config readers**
   - `cfgList(ref)`: list controls with signed uint16 unwrap
@@ -359,11 +329,11 @@ From refs `45/46/47` route:
   - `scheduleFadeStep`
 - **Mode / state transitions**
   - `settleModeChange`
-  - `updateHarmonyParamVisibility`
+  - `updateChordParamVisibility`
 
 ---
 
-## 18) Important interaction rules (summary)
+## 17) Important interaction rules (summary)
 
 1. Shape/SATB and Chord Capture are mutually exclusive chord-mapping systems.
 2. Chord Capture only processes notes when Harmony Mode is Off.
@@ -373,7 +343,7 @@ From refs `45/46/47` route:
 
 ---
 
-## 19) Debug helpers included in script
+## 18) Debug helpers included in script
 
 Temporary debug functions at bottom:
 - `debugNotesForKey`
@@ -385,7 +355,7 @@ These are useful for quick behavioral checks and should be reviewed before produ
 
 ---
 
-## 20) Suggested future doc add-ons (optional)
+## 19) Suggested future doc add-ons (optional)
 
 - Truth table for mode/latch combinations
 - Per-pattern worked examples for a sample held-note set
