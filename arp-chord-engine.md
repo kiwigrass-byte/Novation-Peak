@@ -14,8 +14,8 @@ This preset script combines three note-generation systems:
    Uses held notes as a pool and plays them step-by-step using selectable patterns, sync rates, gate, swing, chance, transpose, octaves, and latch modes.
 
 2. **Harmony Mode** (`ref 37`, labeled “HARMONY MODE” on controller)  
-   - **Off**: keys behave normally (one key = one note)  
-   - **Shape**: each key generates a diatonic chord shape from Key/Scale/Mode  
+   - **Off**: keys behave normally (one key = one note)
+   - **Shape**: each key generates a diatonic chord shape from Key/Scale/Mode
    - **SATB**: each key generates a four-part harmonization with common-practice / tintinnabuli-style voicing options
 
 3. **Chord Capture** (`ref 26`)  
@@ -65,6 +65,11 @@ These systems share source/destination routing and enforce mutual exclusions whe
 - **43** Break Time (ms)
 - **44** Break Direction (Up / Down / Alternating)
 
+## Direct chord sustain
+- **53** HOLD
+- **35** RELEASE (tenths of a second)
+- **38** FADE CC (CC number used for release fade)
+
 ---
 
 ## 3) High-level architecture
@@ -75,7 +80,7 @@ Core internal state buckets:
 - **Generated-note ownership** (Shape/SATB): `noteRefCount`, `keyGeneratedNotes`, `keyVelocity`
 - **Physical-key tracking**: `keysDown`
 - **Shape/SATB priority subsystem**: `shapeHeld`, `shapePressOrder`, `shapeActiveKey`
-- **Chord Capture subsystem**: `chordHeld`, `chordPressOrder`, `chordOffsets`, `chordArmed`, `chordCapturing`, `chordCaptureNotes`, etc.
+- **Hold fade subsystem**: `holdFadeHandles`, `holdFadeNotes`, `holdFadeRoute`
 
 Important design pattern:
 - **Physical keys** are tracked separately from **generated notes**.
@@ -166,7 +171,7 @@ A struck key is snapped to nearest scale tone first, then chord is built by **sc
 Result: chord quality follows scale degree (diatonic behavior).
 
 ## 7.2 Shapes
-14 shapes (`SHAPES`) from single note up to Ninth variants, encoded as `{degree, extraOctaves}` pairs.
+20 shapes (`SHAPES`) from single note up to Jazz Tetrad variants, encoded as `{degree, extraOctaves}` pairs.
 
 ## 7.3 Inversion
 `applyInversion` rotates lowest N shape tones up an octave, wrapping by note count.
@@ -203,7 +208,6 @@ Both are built so the struck note is placed exactly in the selected Cantus voice
 ## 9) Note Priority (`ref 49`)
 
 Shared policy for:
-- Chord Capture playback (when Harmony Mode Off)
 - Shape/SATB active physical-key selection
 
 Modes:
@@ -270,7 +274,15 @@ Release behavior is simple/all-at-once note-off (not staggered off).
 
 ---
 
-## 13) Arp vs Break exclusivity
+## 13) HOLD / RELEASE / FADE
+
+- HOLD keeps directly sounding Shape/SATB chords ringing after the key that struck them is released, when the arp is off.
+- Turning HOLD off fades those held direct chords out over RELEASE using FADE CC.
+- HOLD and the arp cannot run together.
+
+---
+
+## 14) Arp vs Break exclusivity
 
 Mutual handoff logic:
 - If Break Time rises above 0 while arp is on → arp is turned off.
@@ -280,29 +292,28 @@ Implementation uses `setValue()` intentionally so normal side effects run as if 
 
 ---
 
-## 14) Routing and I/O
+## 15) Routing and I/O
 
-## 14.1 Note source
+## 15.1 Note source
 `srcMatches()` compares incoming note route against refs `3/4/5`.
 
-## 14.2 Destination
+## 15.2 Destination
 `destRoute()` reads refs `6/7/8`.
 
-## 14.3 External switch CC input
+## 15.3 External switch CC input
 From refs `45/46/47` route:
 - CC **126** toggles Arp On/Off (`ref 29`)
-- CC **127** toggles Capture (`ref 26`)
+- CC **125** toggles HOLD (`ref 53`)
 - value >= 64 treated as ON
 
 ---
 
-## 15) Initialization / lifecycle
+## 16) Initialization / lifecycle
 
 ## `preset.onReady()`
 - sends All Notes Off to destination
 - clears runtime state
 - restores timer enable according to arp toggle state
-- resets chord-armed state/indicator in fresh Lua state
 - refreshes Mode display override
 - syncs `lastChordMode`
 - applies parameter visibility for loaded mode
@@ -310,12 +321,12 @@ From refs `45/46/47` route:
 ## `preset.onExit()`
 - disables timer
 - stops arp current note
-- stops chord-capture sounding notes
 - sends note-offs for direct Shape/SATB sounding notes when applicable
+- cancels any HOLD fade in progress
 
 ---
 
-## 16) Key helper functions (developer index)
+## 17) Key helper functions (developer index)
 
 - **Config readers**
   - `cfgList(ref)`: list controls with signed uint16 unwrap
@@ -342,27 +353,27 @@ From refs `45/46/47` route:
   - `basePeriodMs`
   - `swingDelayMs`
   - `stepIsDelayedBySwing`
-- **Chord Capture**
-  - `triggerChord`
-  - `finalizeCapture`
-  - `clearChordCapture`
+- **Hold / fade**
+  - `fadeCurveLevel`
+  - `fadeOutAndRelease`
+  - `scheduleFadeStep`
 - **Mode / state transitions**
   - `settleModeChange`
   - `updateHarmonyParamVisibility`
 
 ---
 
-## 17) Important interaction rules (summary)
+## 18) Important interaction rules (summary)
 
 1. Shape/SATB and Chord Capture are mutually exclusive chord-mapping systems.
 2. Chord Capture only processes notes when Harmony Mode is Off.
 3. Arp and Break Time are mutually exclusive “who owns keystroke timing” engines.
-4. Key/Scale/Mode are global in practice (arp quantization + harmony degree logic), not Shape-only.
+4. HOLD affects direct Shape/SATB sounding, not the arp pool.
 5. Generated-note reference counting prevents premature note-off with overlapping generated pitches.
 
 ---
 
-## 18) Debug helpers included in script
+## 19) Debug helpers included in script
 
 Temporary debug functions at bottom:
 - `debugNotesForKey`
@@ -374,7 +385,7 @@ These are useful for quick behavioral checks and should be reviewed before produ
 
 ---
 
-## 19) Suggested future doc add-ons (optional)
+## 20) Suggested future doc add-ons (optional)
 
 - Truth table for mode/latch combinations
 - Per-pattern worked examples for a sample held-note set
