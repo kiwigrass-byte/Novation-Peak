@@ -16,7 +16,7 @@ If notes react but no sound, destination is usually wrong.
 
 ---
 
-## 2) Choose your play mode (Harmony Mode, ref 37)
+## 2) Choose your play mode (Chord Mode, ref 37)
 
 - **Off**: normal arp input (keys go straight into arp pool)
 - **Shape**: each key expands to a diatonic chord shape
