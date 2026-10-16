@@ -2,7 +2,7 @@
 
 > Repository: `kiwigrass-byte/Novation-Peak`  
 > Script: `arp-chord-engine.lua`  
-> Purpose: Arpeggiator + Harmony generator (Shape/SATB) + Chord Capture, with shared routing and performance controls.
+> Purpose: Arpeggiator + Chord generator (Shape/SATB), with shared routing and performance controls.
 
 ---
 
