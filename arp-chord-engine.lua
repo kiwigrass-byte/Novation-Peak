@@ -204,10 +204,12 @@ local SCALE_OFFSETS = {
   [6] = { 0, 1, 3, 4, 6, 7, 9, 10 },                -- Dominant Dim
   [7] = { 0, 3, 4, 7, 8, 11 },                      -- Augmented
   [8] = { 0, 2, 4, 6, 8, 10 },                      -- Whole Tone
+  [9] = { 0, 2, 4, 7, 9 },                          -- Pentatonic
 }
 
 local SCALE_CHROMATIC, SCALE_MAJOR, SCALE_NAT_MINOR, SCALE_HARM_MINOR = 0, 1, 2, 3
 local SCALE_DOMINANT, SCALE_FULL_DIM, SCALE_DOM_DIM, SCALE_AUGMENTED, SCALE_WHOLE_TONE = 4, 5, 6, 7, 8
+local SCALE_PENTATONIC = 9
 
 -- Rotates a scale's interval pattern to start from its mode-th degree,
 -- keeping the same root (Key) as offset 0 - this is what turns Major's
@@ -375,6 +377,21 @@ local DOMINANT_MODE_NAMES = {
   [6] = "Lydian",
 }
 
+-- Pentatonic's 5 modes - the same 5-note scale rotated to start on each of
+-- its own degrees, named the way players actually ask for them rather than
+-- by scale-degree number: mode 0 is the major pentatonic itself (1 2 3 5 6),
+-- mode 1 rotates to its 2nd degree (the "Suspended" pentatonic, no 3rd),
+-- mode 2 to its 3rd (Blues Minor), mode 3 to its 4th (Blues Major), and
+-- mode 4 to its 5th - the relative minor pentatonic, the one every guitarist
+-- already knows as "the" pentatonic scale.
+local PENTATONIC_MODE_NAMES = {
+  [0] = "Major Pentatonic",
+  [1] = "Suspended",
+  [2] = "Blues Minor",
+  [3] = "Blues Major",
+  [4] = "Minor Pentatonic",
+}
+
 -- Accidentals are written in plain ASCII ("#" for sharp, "b"/"bb" for
 -- flat/double-flat, "nat" for natural) rather than the Unicode natural/
 -- sharp/flat glyphs (U+266E/266F/266D): the controller's screen font has
@@ -401,6 +418,7 @@ local function modeNamesForScale(scale)
   if scale == SCALE_NAT_MINOR then return NAT_MINOR_MODE_NAMES end
   if scale == SCALE_HARM_MINOR then return HARM_MINOR_MODE_NAMES end
   if scale == SCALE_DOMINANT then return DOMINANT_MODE_NAMES end
+  if scale == SCALE_PENTATONIC then return PENTATONIC_MODE_NAMES end
   return nil
 end
 
@@ -422,6 +440,9 @@ local function modeChoiceCountForScale(scale)
   end
   if scale == SCALE_AUGMENTED then
     return 2
+  end
+  if scale == SCALE_PENTATONIC then
+    return 5
   end
   return 12
 end
